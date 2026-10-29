@@ -63,6 +63,8 @@ function codecName(vcodec?: string | null, acodec?: string | null): string {
     if (v.includes("avc") || v.includes("h264")) return "H.264";
     if (v.includes("hevc") || v.includes("hvc1") || v.includes("h265")) return "H.265";
     if (v.includes("av01") || v.includes("av1")) return "AV1";
+    if (v.startsWith("vp09") || v.includes("vp9")) return "VP9";
+    if (v.startsWith("vp08") || v.includes("vp8")) return "VP8";
     if (v.includes("vp9")) return "VP9";
     if (v.includes("vp8")) return "VP8";
     return v;
@@ -110,9 +112,9 @@ function useFormatGroups(info: MediaInfo | null) {
       return out;
     };
     return {
-      muxed: dedupe(groups["Video + audio"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${f.vcodec}`),
-      videoOnly: dedupe(groups["Video only"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${f.vcodec}`),
-      audio: dedupe(groups["Audio only"], (f) => `${f.abr ?? f.tbr ?? 0}|${f.ext}|${f.acodec}`),
+      muxed: dedupe(groups["Video + audio"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${codecName(f.vcodec)}`),
+      videoOnly: dedupe(groups["Video only"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${codecName(f.vcodec)}`),
+      audio: dedupe(groups["Audio only"], (f) => `${f.abr ?? f.tbr ?? 0}|${f.ext}|${codecName(null, f.acodec)}`),
     };
   }, [info]);
 }
@@ -479,9 +481,18 @@ export default function Downloader() {
 
               {/* channel row with avatar */}
               <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-sm font-black text-white uppercase">
-                  {channelName.trim().charAt(0) || "?"}
-                </span>
+                {info.channel_avatar ? (
+                  <img
+                    src={info.channel_avatar}
+                    alt=""
+                    className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-white/10"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-sm font-black text-white uppercase">
+                    {channelName.trim().charAt(0) || "?"}
+                  </span>
+                )}
                 <span className="text-sm font-bold text-zinc-100">{channelName}</span>
                 {info.channel_subs != null && info.channel_subs > 0 && (
                   <span className="rounded-md bg-zinc-800/80 px-2 py-0.5 text-xs font-semibold text-zinc-400">
@@ -680,15 +691,16 @@ function FormatSection({
       {items.map((f) => {
         const label = labelOf(f);
         const sub = subOf?.(f) || "";
+        const fpsExtra = f.fps && f.fps > 30 ? ` · ${f.fps} fps` : "";
         return (
           <a
             key={f.format_id}
             href={`/api/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(f.format_id)}`}
             onClick={(e) => onClick(e, { url, format: f.format_id }, label)}
-            className="group flex items-center gap-4 bg-zinc-900/30 px-5 py-3 transition hover:bg-zinc-800/70"
+            className="group grid h-14 grid-cols-[auto,1fr,5.5rem,auto] items-center gap-4 bg-zinc-900/30 px-5 py-2 text-left transition hover:bg-zinc-800/70"
           >
             <span
-              className={`flex h-10 w-16 items-center justify-center rounded-lg text-sm font-extrabold tracking-wide uppercase ${
+              className={`flex h-9 w-16 items-center justify-center rounded-lg text-sm font-extrabold tracking-wide uppercase ${
                 f.ext === "mp4"
                   ? "bg-indigo-500/25 text-indigo-300"
                   : f.ext === "webm"
@@ -700,18 +712,25 @@ function FormatSection({
             >
               {f.ext}
             </span>
-            <span className="min-w-0 flex-1">
+            <span className="min-w-0">
               <span className="block truncate text-base font-bold text-zinc-100">
                 {label}
                 {f.height && (f.height ?? 0) >= 1080 && (
-                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-emerald-400">
+                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 align-[2px] text-[10px] font-extrabold tracking-wider text-emerald-400">
                     HD
                   </span>
                 )}
               </span>
-              {sub && <span className="block truncate text-xs text-zinc-500">{sub}</span>}
+              {sub && (
+                <span className="block truncate text-xs text-zinc-500">
+                  {sub}
+                  {fpsExtra}
+                </span>
+              )}
             </span>
-            <span className="text-sm text-zinc-500">{fmtSize(f.filesize, f.filesize_approx)}</span>
+            <span className="text-right text-sm tabular-nums text-zinc-500">
+              {fmtSize(f.filesize, f.filesize_approx) || "—"}
+            </span>
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-600 transition group-hover:bg-indigo-500 group-hover:text-white">
               <Download className="h-4 w-4" />
             </span>

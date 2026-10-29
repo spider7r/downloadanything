@@ -96,11 +96,6 @@ function HowItWorks() {
         Three steps. No signup, no ads-wall, no waiting rooms.
       </p>
       <div className="relative mt-12 grid gap-6 md:grid-cols-3">
-        {/* connector line */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute top-12 right-[16%] left-[16%] hidden border-t-2 border-dashed border-zinc-800 md:block"
-        />
         {STEPS.map(({ n, icon: Icon, title, text }) => (
           <div
             key={n}
@@ -181,14 +176,20 @@ const FEATURES = [
 function Features() {
   return (
     <section id="features" className="mx-auto max-w-6xl px-4 pb-16">
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
         {FEATURES.map(({ icon: Icon, title, text }) => (
-          <div key={title} className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20">
-              <Icon className="h-5 w-5 text-indigo-400" />
+          <div
+            key={title}
+            className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 transition duration-300 hover:-translate-y-1.5 hover:border-zinc-600 hover:shadow-xl hover:shadow-indigo-500/5"
+          >
+            {/* gradient icon tile */}
+            <div className="grid h-13 w-13 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 shadow-lg shadow-indigo-500/30 transition duration-300 group-hover:scale-110 group-hover:rotate-3">
+              <Icon className="h-6 w-6 text-white" />
             </div>
-            <h3 className="mt-4 font-semibold text-white">{title}</h3>
-            <p className="mt-1.5 text-sm text-zinc-400">{text}</p>
+            <h3 className="relative mt-5 text-lg font-bold text-white">{title}</h3>
+            <p className="relative mt-2 text-sm text-zinc-400">{text}</p>
+            {/* bottom accent line */}
+            <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-indigo-500 to-fuchsia-500 opacity-0 transition duration-300 group-hover:opacity-100" />
           </div>
         ))}
       </div>

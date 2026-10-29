@@ -19,6 +19,7 @@ export type MediaInfo = {
   uploader?: string | null;
   channel?: string | null;
   channel_subs?: number | null;
+  channel_avatar?: string | null;
   description?: string | null;
   view_count?: number | null;
   like_count?: number | null;

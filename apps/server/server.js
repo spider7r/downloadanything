@@ -255,11 +255,47 @@ app.post("/api/info", async (req, res) => {
         format_note: f.format_note || null,
       }))
       .filter((f) => f.ext !== "mhtml");
+    // Channel avatar: use it directly when the extractor provides it; otherwise
+    // for YouTube scrape the channel avatar out of the watch page (ytInitialData).
+    let channelAvatar = null;
+    try {
+      channelAvatar =
+        info.uploader_thumbnail || info.channel_thumbnail || info.user_thumbnail ||
+        info?.artist?.picture_large || null;
+      if (!channelAvatar && info.webpage_url && /youtube/i.test(info.webpage_url)) {
+        const page = await fetch(info.webpage_url, {
+          signal: AbortSignal.timeout(7000),
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+        });
+        if (page.ok) {
+          // YouTube minifies/escapes JSON inside the page; normalize so regexes are sane
+          const html = (await page.text()).replace(/\\u0026/g, "&").replace(/\\\//g, "/");
+          const m =
+            html.match(
+              /"videoOwnerRenderer":\s*\{\s*"thumbnail":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
+            ) ||
+            html.match(
+              /"avatar":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
+            );
+          if (m) {
+            // URLs ship at tiny densities (=s48..); ask for a sharper one
+            channelAvatar = m[1].replace(/=s\d+/, "=s400");
+          }
+        }
+      }
+    } catch {
+      /* avatar is best-effort only — never break /api/info */
+    }
+
     res.json({
       title: info.title || info.id || "Untitled",
       uploader: info.uploader || info.uploader_id || info.channel || null,
       channel: info.channel || info.uploader || null,
       channel_subs: info.channel_follower_count ?? info.subscriber_count ?? null,
+      channel_avatar: channelAvatar,
       description:
         typeof info.description === "string" ? info.description.slice(0, 900) : null,
       view_count: info.view_count ?? null,
