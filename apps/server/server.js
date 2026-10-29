@@ -258,6 +258,13 @@ app.post("/api/info", async (req, res) => {
     res.json({
       title: info.title || info.id || "Untitled",
       uploader: info.uploader || info.uploader_id || info.channel || null,
+      channel: info.channel || info.uploader || null,
+      channel_subs: info.channel_follower_count ?? info.subscriber_count ?? null,
+      description:
+        typeof info.description === "string" ? info.description.slice(0, 900) : null,
+      view_count: info.view_count ?? null,
+      like_count: info.like_count ?? null,
+      upload_date: info.upload_date ?? null, // YYYYMMDD
       duration: info.duration || null,
       thumbnail: info.thumbnail || null,
       webpage_url: info.webpage_url || req.body.url,

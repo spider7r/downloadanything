@@ -17,6 +17,12 @@ export type MediaFormat = {
 export type MediaInfo = {
   title: string;
   uploader?: string | null;
+  channel?: string | null;
+  channel_subs?: number | null;
+  description?: string | null;
+  view_count?: number | null;
+  like_count?: number | null;
+  upload_date?: string | null;
   duration?: number | null;
   thumbnail?: string | null;
   webpage_url?: string | null;

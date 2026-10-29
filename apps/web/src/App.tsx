@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import Downloader from "./components/Downloader";
+import { PLATFORMS } from "./lib/platforms";
 
 function Header() {
   return (
@@ -105,24 +106,7 @@ function HowItWorks() {
   );
 }
 
-const PLATFORMS = [
-  "YouTube",
-  "TikTok",
-  "Instagram",
-  "X (Twitter)",
-  "Facebook",
-  "Reddit",
-  "SoundCloud",
-  "Twitch",
-  "Vimeo",
-  "Pinterest",
-  "Dailymotion",
-  "Bilibili",
-  "Rumble",
-  "Odnoklassniki",
-  "VK",
-  "Tumblr",
-];
+const PLATFORM_NAMES = PLATFORMS.map((p) => p.name);
 
 function SupportedGrid() {
   return (
@@ -133,7 +117,7 @@ function SupportedGrid() {
         downloader. If it can be downloaded, we can do it.
       </p>
       <div className="mt-10 flex flex-wrap justify-center gap-2.5">
-        {PLATFORMS.map((name) => (
+        {PLATFORM_NAMES.map((name) => (
           <span
             key={name}
             className="rounded-full border border-zinc-800 bg-zinc-900/60 px-4 py-1.5 text-sm text-zinc-300 transition hover:border-indigo-500/60 hover:text-white"
