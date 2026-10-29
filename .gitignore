@@ -1,0 +1,7 @@
+node_modules/
+dist/
+apps/server/bin/
+apps/server/tmp/
+apps/desktop/bin/
+*.local
+.env
