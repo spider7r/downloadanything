@@ -154,7 +154,7 @@ const hits = new Map();
 app.use((req, res, next) => {
   const ip = req.ip;
   const now = Date.now();
-  const window = hits.get(ip) || { count: 0, reset: now + 60_000 };
+  let window = hits.get(ip) || { count: 0, reset: now + 60_000 };
   if (now > window.reset) window = { count: 0, reset: now + 60_000 };
   window.count++;
   hits.set(ip, window);
@@ -238,7 +238,11 @@ app.post("/api/info", async (req, res) => {
     const start = out.indexOf("{");
     const info = JSON.parse(out.slice(start));
     const formats = (info.formats || [])
-      .filter((f) => f.format_id && f.url && ["http", "m3u8", "rtmp"].some((s) => (f.protocol || "").includes(s) || s === "http"))
+      .filter((f) => f.format_id && f.url)
+      .filter((f) => {
+        const proto = f.protocol || "";
+        return proto.includes("http") || proto.includes("m3u8") || proto.includes("rtmp");
+      })
       .map((f) => ({
         format_id: String(f.format_id),
         ext: f.ext || "",
@@ -284,6 +288,14 @@ app.get("/api/download", async (req, res) => {
     return res.status(400).json({ error: "Invalid format id" });
   }
 
+  // MP3 mode: extract & convert best audio with ffmpeg
+  const wantMp3 = req.query.mp3 === "1" && !!FFMPEG_PATH;
+  const selectedFormat = wantMp3 ? (format === "auto" ? "ba/b" : format) : format;
+
+  if (wantMp3 && selectedFormat === "bv*+ba/b") {
+    return res.status(400).json({ error: "MP3 mode needs ffmpeg, which is unavailable" });
+  }
+
   const session = crypto.randomBytes(8).toString("hex");
   const workDir = path.join(TMP_DIR, session);
   await fsp.mkdir(workDir, { recursive: true });
@@ -303,12 +315,14 @@ app.get("/api/download", async (req, res) => {
 
   const args = [
     "-f",
-    format,
+    selectedFormat,
     "--no-playlist",
     "--no-warnings",
+    "--no-mtime",
     "-o",
     path.join(workDir, "%(title).80B.%(ext)s"),
     ...(FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : []),
+    ...(wantMp3 ? ["-x", "--audio-format", "mp3", "--audio-quality", "0"] : []),
     "--restrict-filenames",
     "--no-part",
     url,
@@ -354,6 +368,9 @@ app.get("/api/download", async (req, res) => {
     if (!res.headersSent) res.status(422).json({ error: err.message || "Download failed" });
   }
 });
+
+// Serve JSON (never HTML) for unknown routes
+app.use((req, res) => res.status(404).json({ error: "Unknown endpoint" }));
 
 /* --------------------------- startup ----------------------------- */
 

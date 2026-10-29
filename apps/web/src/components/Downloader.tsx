@@ -23,40 +23,58 @@ function fmtDuration(s?: number | null): string {
     : `${m}:${String(sec).padStart(2, "0")}`;
 }
 
-function fmtSize(bytes?: number | null): string {
-  if (!bytes) return "";
-  const mb = bytes / 1024 / 1024;
-  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+function fmtSize(bytes?: number | null, approx?: number | null): string {
+  const exact = bytes ?? 0;
+  if (!exact && !approx) return "";
+  const b = exact || (approx ?? 0);
+  const mb = b / 1024 / 1024;
+  const label = !exact && approx ? "~" : "";
+  return `${label}${mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : mb.toFixed(mb < 10 ? 1 : 0) + " MB"}`;
 }
 
-/** Classify formats into "Video" (incl. muxed/progressive) and "Audio only" lists. */
+/**
+ * Split all formats into "Video" and "Audio only" lists.
+ * - Video list: every entry with a video codec (progressive shows a ✓, adaptive notes "video + audio merged")
+ * - Both lists keep ALL options (stable-sorted, deduped).
+ */
 function useFormatLists(info: MediaInfo | null) {
   return useMemo(() => {
-    const video: MediaFormat[] = [];
+    const progressive: MediaFormat[] = []; // has video AND audio (single file, no merge)
+    const adaptive: MediaFormat[] = []; // video without audio (needs ffmpeg merge)
     const audio: MediaFormat[] = [];
+
     for (const f of info?.formats ?? []) {
-      const hasV = f.vcodec && f.vcodec !== "none";
-      const hasA = f.acodec && f.acodec !== "none";
-      if (hasV) video.push(f);
+      const hasV = !!f.vcodec && f.vcodec !== "none";
+      const hasA = !!f.acodec && f.acodec !== "none";
+      if (hasV && hasA) progressive.push(f);
+      else if (hasV) adaptive.push(f);
       else if (hasA) audio.push(f);
     }
-    // Highest quality first, dedupe by (resolution, ext)
-    video.sort((a, b) => (b.height ?? 0) - (a.height ?? 0) || (b.tbr ?? 0) - (a.tbr ?? 0));
-    audio.sort((a, b) => (b.abr ?? b.tbr ?? 0) - (a.abr ?? a.tbr ?? 0));
-    const seen = new Set<string>();
-    const dedupe = (list: MediaFormat[]) =>
-      list.filter((f) => {
-        const key = `${f.height ?? f.abr ?? f.tbr ?? 0}-${f.ext}`;
-        if (seen.has(key)) return false;
+
+    const byQuality = (a: MediaFormat, b: MediaFormat) =>
+      (b.height ?? b.abr ?? b.tbr ?? 0) - (a.height ?? a.abr ?? a.tbr ?? 0);
+
+    const dedupe = (list: MediaFormat[], keyFn: (f: MediaFormat) => string) => {
+      const seen = new Set<string>();
+      const out: MediaFormat[] = [];
+      for (const f of [...list].sort(byQuality)) {
+        const key = keyFn(f);
+        if (seen.has(key)) continue;
         seen.add(key);
-        return true;
-      });
+        out.push(f);
+      }
+      return out;
+    };
+
     return {
-      video: dedupe(video).slice(0, 8),
-      audio: dedupe(audio.filter((a) => ["mp3", "m4a", "opus", "webm", "ogg"].includes(a.ext) || a.ext === "m4a")).slice(0, 5) || dedupe(audio).slice(0, 5),
+      progressive: dedupe(progressive, (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${f.vcodec}`),
+      adaptive: dedupe(adaptive, (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${f.vcodec}`),
+      audio: dedupe(audio, (f) => `${f.abr ?? f.tbr ?? 0}|${f.ext}|${f.acodec}`),
     };
   }, [info]);
 }
+
+const AUDIO_ORDER = ["mp3", "m4a", "opus", "webm", "ogg", "wav"];
 
 export default function Downloader() {
   const [url, setUrl] = useState("");
@@ -64,6 +82,8 @@ export default function Downloader() {
   const [info, setInfo] = useState<MediaInfo | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"video" | "audio">("video");
+  const [downloadingLabel, setDownloadingLabel] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const lists = useFormatLists(info);
 
@@ -94,7 +114,21 @@ export default function Downloader() {
     setInfo(null);
     setPhase("idle");
     setError("");
+    setDownloading(false);
+    setDownloadingLabel(null);
   }
+
+  function startDownload(e: React.MouseEvent<HTMLAnchorElement>, label: string) {
+    setDownloading(true);
+    setDownloadingLabel(label);
+    // clear the state a bit later (download continues independently in the browser)
+    setTimeout(() => setDownloading(false), 8000);
+  }
+
+  const hasMp3 = useMemo(
+    () => lists.audio.some((a) => a.ext === "m4a" || a.ext === "mp3" || a.ext === "opus" || a.ext === "webm"),
+    [lists.audio],
+  );
 
   return (
     <div id="downloader" className="mx-auto w-full max-w-2xl">
@@ -139,16 +173,18 @@ export default function Downloader() {
               <img
                 src={info.thumbnail}
                 alt=""
-                className="h-28 w-50 shrink-0 rounded-lg object-cover sm:w-44"
+                className="h-28 w-44 shrink-0 rounded-lg object-cover"
+                referrerPolicy="no-referrer"
               />
             )}
             <div className="min-w-0 flex-1">
-              <h3 className="truncate text-lg font-semibold text-white">{info.title}</h3>
+              <h3 className="line-clamp-2 text-lg font-semibold text-white">{info.title}</h3>
               <p className="mt-1 text-sm text-zinc-500">
                 {info.uploader}
                 {info.uploader && " · "}
                 {info.duration ? fmtDuration(info.duration) : ""}
               </p>
+              <p className="mt-0.5 text-xs text-zinc-600">{lists.progressive.length + lists.adaptive.length + lists.audio.length} formats available</p>
             </div>
             <button
               onClick={reset}
@@ -182,38 +218,87 @@ export default function Downloader() {
             </button>
           </div>
 
-          <div className="divide-y divide-zinc-800/60 border-t border-zinc-800">
-            {(tab === "video" ? lists.video : lists.audio).map((f) => {
-              const isHd = (f.height ?? 0) >= 1080 || (tab === "audio" && (f.abr ?? 0) >= 128);
-              return (
+          <div className="max-h-96 divide-y divide-zinc-800/60 overflow-y-auto border-t border-zinc-800">
+            {tab === "video" &&
+              [...lists.progressive, ...lists.adaptive].map((f) => {
+                const isProgressive = lists.progressive.includes(f);
+                const isHd = (f.height ?? 0) >= 1080;
+                return (
+                  <a
+                    key={`${tab}-${f.format_id}`}
+                    href={downloadUrl({ url: url.trim(), format: f.format_id })}
+                    onClick={(e) => startDownload(e, `${f.height}p ${f.ext}`)}
+                    className="mt-px flex items-center gap-3 bg-zinc-900/40 px-4 py-3 transition hover:bg-zinc-800/70"
+                  >
+                    <span className="flex h-8 w-14 items-center justify-center rounded-md bg-zinc-800 text-xs font-bold tracking-wide text-zinc-300 uppercase">
+                      {f.ext}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">
+                      {f.height ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""}${isHd ? " · HD" : ""}` : f.format_note || f.format_id}
+                      {!isProgressive && <span className="ml-2 text-xs text-zinc-500">(merged video+audio)</span>}
+                    </span>
+                    <span className="text-xs text-zinc-500">{fmtSize(f.filesize, f.filesize_approx)}</span>
+                    <Download className="h-4 w-4 shrink-0 text-indigo-400" />
+                  </a>
+                );
+              })}
+
+            {tab === "audio" && hasMp3 && (
+              <a
+                key="mp3-best"
+                href={downloadUrl({ url: url.trim(), format: "ba/b", mp3: true })}
+                onClick={(e) => startDownload(e, "best MP3")}
+                className="flex items-center gap-3 bg-gradient-to-r from-fuchsia-950/40 to-indigo-950/40 px-4 py-3 transition hover:brightness-125"
+              >
+                <span className="flex h-8 w-14 items-center justify-center rounded-md bg-fuchsia-600/80 text-xs font-bold text-white">
+                  mp3
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-white">
+                  MP3 — best quality (converted)
+                </span>
+                <Download className="h-4 w-4 shrink-0 text-fuchsia-400" />
+              </a>
+            )}
+
+            {tab === "audio" &&
+              [...lists.audio].sort((a, b) => {
+                const rank = (f: MediaFormat) => AUDIO_ORDER.indexOf(f.ext) + 1 || 99;
+                return rank(a) - rank(b) || (b.abr ?? 0) - (a.abr ?? 0);
+              }).map((f) => (
                 <a
                   key={f.format_id}
                   href={downloadUrl({ url: url.trim(), format: f.format_id })}
-                  className="flex items-center gap-3 px-4 py-3 transition hover:bg-zinc-800/50"
+                  onClick={(e) => startDownload(e, `${Math.round(f.abr ?? 0)} kbps ${f.ext}`)}
+                  className="flex items-center gap-3 px-4 py-3 transition hover:bg-zinc-800/70"
                 >
                   <span className="flex h-8 w-14 items-center justify-center rounded-md bg-zinc-800 text-xs font-bold tracking-wide text-zinc-300 uppercase">
                     {f.ext}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">
-                    {tab === "video"
-                      ? f.height
-                        ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""}${isHd ? " HD" : ""}`
-                        : f.format_note || f.format_id
-                      : f.abr
-                        ? `${Math.round(f.abr)} kbps`
-                        : f.format_note || "Quality"}
-                    {tab === "audio" ? "" : f.filesize || f.filesize_approx ? "" : ""}
+                    {f.abr ? `${Math.round(f.abr)} kbps` : f.format_note || "Best available quality"}
+                    {(f.abr ?? 0) >= 128 && <span className="ml-2 text-xs text-green-500">HD</span>}
                   </span>
-                  <span className="text-xs text-zinc-500">{fmtSize(f.filesize ?? f.filesize_approx)}</span>
-                  <Download className="h-4 w-4 shrink-0 text-indigo-400" />
+                  <span className="text-xs text-zinc-500">{fmtSize(f.filesize, f.filesize_approx)}</span>
+                  <Download className="h-4 w-4 shrink-0 text-fuchsia-400" />
                 </a>
-              );
-            })}
+              ))}
           </div>
 
           <p className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/60 px-4 py-3 text-xs text-zinc-500">
-            <Check className="h-3.5 w-3.5 text-green-500" />
-            Your download will start in the browser. Streamed directly — we don't store files.
+            {downloading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-400" />
+                <span>
+                  Preparing <span className="text-zinc-300">{downloadingLabel}</span> — the file will
+                  appear in your browser downloads shortly. Large HLS videos can take a minute.
+                </span>
+              </>
+            ) : (
+              <>
+                <Check className="h-3.5 w-3.5 shrink-0 text-green-500" />
+                Streamed directly to you — we don't store files.
+              </>
+            )}
           </p>
         </div>
       )}
