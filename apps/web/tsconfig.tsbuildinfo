@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/components/downloader.tsx","./src/lib/platforms.ts"],"version":"5.6.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/components/downloader.tsx","./src/components/logoticker.tsx","./src/components/platformicon.tsx","./src/lib/platforms.ts"],"version":"5.6.3"}

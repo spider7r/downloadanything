@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import Downloader from "./components/Downloader";
+import PlatformIcon from "./components/PlatformIcon";
 import { PLATFORMS } from "./lib/platforms";
 
 function Header() {
@@ -106,8 +107,6 @@ function HowItWorks() {
   );
 }
 
-const PLATFORM_NAMES = PLATFORMS.map((p) => p.name);
-
 function SupportedGrid() {
   return (
     <section id="supported" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-16">
@@ -116,14 +115,17 @@ function SupportedGrid() {
         Powered by <span className="text-zinc-200">yt-dlp</span>, the engine behind every serious
         downloader. If it can be downloaded, we can do it.
       </p>
-      <div className="mt-10 flex flex-wrap justify-center gap-2.5">
-        {PLATFORM_NAMES.map((name) => (
-          <span
-            key={name}
-            className="rounded-full border border-zinc-800 bg-zinc-900/60 px-4 py-1.5 text-sm text-zinc-300 transition hover:border-indigo-500/60 hover:text-white"
+      <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5 lg:grid-cols-6">
+        {PLATFORMS.map((p) => (
+          <div
+            key={p.key}
+            className="group flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 transition hover:border-zinc-600"
           >
-            {name}
-          </span>
+            <span className="grid h-8 w-8 shrink-0 place-items-center text-zinc-500 transition-colors group-hover:text-white" style={{}}>
+              <PlatformIcon platformKey={p.key} className="h-6 w-6 group-hover:scale-110" />
+            </span>
+            <span className="truncate text-sm font-semibold text-zinc-300">{p.name}</span>
+          </div>
         ))}
       </div>
       <p className="mt-6 text-center text-sm text-zinc-500">…and thousands more.</p>

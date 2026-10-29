@@ -30,6 +30,8 @@ import {
   detectPlatform,
   type Platform,
 } from "../lib/platforms";
+import PlatformIcon from "./PlatformIcon";
+import LogoTicker from "./LogoTicker";
 
 type Phase = "idle" | "loading" | "ready" | "error";
 
@@ -167,31 +169,22 @@ const CheckCircleMuted = () => (
   </svg>
 );
 
-/* ------------------------------ platform pills ------------------------------ */
+/* --------------------------- detected platform chip --------------------------- */
 
-function PlatformPills({ activeKey }: { activeKey: string | null }) {
+function DetectedChip({ platform }: { platform: Platform }) {
   return (
-    <div className="mx-auto mb-4 flex w-full max-w-5xl flex-nowrap justify-start gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:justify-center">
-      {PLATFORMS.map((p) => {
-        const active = p.key === activeKey;
-        return (
-          <span
-            key={p.key}
-            style={
-              active
-                ? { backgroundColor: p.color, color: "#09090b", borderColor: p.color, boxShadow: `0 0 24px -6px ${p.color}` }
-                : undefined
-            }
-            className={`shrink-0 rounded-full border px-3.5 py-1.5 text-xs font-bold tracking-wide transition-all duration-300 ${
-              active
-                ? "scale-110"
-                : "border-zinc-800 bg-zinc-900/60 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"
-            }`}
-          >
-            {p.name}
-          </span>
-        );
-      })}
+    <div
+      className="mx-auto mb-3 flex w-fit flex-wrap items-center gap-2 rounded-full border px-4 py-1.5 text-sm font-bold"
+      style={{
+        backgroundColor: `${platform.color}1a`,
+        borderColor: `${platform.color}55`,
+        color: platform.color,
+        boxShadow: `0 0 30px -10px ${platform.color}`,
+      }}
+    >
+      <PlatformIcon platformKey={platform.key} className="h-4 w-4" />
+      {platform.name}
+      <span className="font-medium text-zinc-500">link detected</span>
     </div>
   );
 }
@@ -345,7 +338,9 @@ export default function Downloader() {
 
   return (
     <div id="downloader" className="mx-auto w-full max-w-5xl scroll-mt-24">
-      <PlatformPills activeKey={detectedPlatform?.key ?? null} />
+      <LogoTicker activeKey={detectedPlatform?.key ?? null} />
+
+      {!info && detectedPlatform && !error && <DetectedChip platform={detectedPlatform} />}
 
       <form onSubmit={detect} className="flex flex-col gap-3 sm:flex-row">
         <div className="relative flex-1">
@@ -429,9 +424,10 @@ export default function Downloader() {
                 )}
                 {platformInfo && (
                   <span
-                    className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-bold"
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold"
                     style={{ backgroundColor: `${platformInfo.color}26`, color: platformInfo.color }}
                   >
+                    <PlatformIcon platformKey={platformInfo.key} className="h-3 w-3" />
                     {platformInfo.name}
                   </span>
                 )}
