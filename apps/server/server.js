@@ -2,12 +2,15 @@
  * Download Anything — downloader API.
  *
  * Runs yt-dlp / FFmpeg (open-source engines) as child processes:
- *   GET  /api/health     -> engine versions
- *   POST /api/info       { url }            -> metadata + available formats
- *   GET  /api/download   ?url=&format=      -> streams the file to the client
+ *   GET    /api/health            -> engine versions
+ *   POST   /api/info              { url }                    -> metadata + every available format
+ *   POST   /api/download          { url, format?, mp3? }     -> starts a background download job -> { id }
+ *   GET    /api/progress/:id                                 -> live progress of a job
+ *   GET    /api/file/:id                                     -> streams the finished file to the browser
+ *   DELETE /api/download/:id                                 -> cancels a running job
  *
- * Binaries are auto-downloaded on first boot into ./bin (yt-dlp is open source;
- * FFmpeg builds are free to distribute). Override with YTDLP_PATH / FFMPEG_PATH env vars.
+ * Binaries are auto-downloaded on first boot into ./bin (yt-dlp & FFmpeg builds are free to redistribute).
+ * Override with YTDLP_PATH / FFMPEG_PATH env vars.
  */
 
 import express from "express";
@@ -32,7 +35,7 @@ process.on("unhandledRejection", (err) => console.error("[unhandled]", err));
 /* ------------------------------------------------------------------ */
 
 const PLATFORM = process.platform; // win32 | linux | darwin
-const ARCH = os.arch(); // x64 -> x86_64 binaries
+const ARCH = os.arch();
 
 function exeName(name) {
   return PLATFORM === "win32" ? `${name}.exe` : name;
@@ -68,12 +71,11 @@ async function ensureFfmpeg() {
   console.log("[bin] downloading FFmpeg…");
   try {
     if (PLATFORM === "win32") {
-      // gyan.dev "essentials" zip; Windows ships bsdtar which can extract zip & xz
+      // gyan.dev "essentials" zip; Windows ships bsdtar which can extract zip
       const zip = path.join(BIN_DIR, "ffmpeg.zip");
       await downloadTo("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip", zip);
       await run("tar", ["-xf", zip, "-C", BIN_DIR], BIN_DIR);
       await fsp.rm(zip, { force: true });
-      // find ffmpeg.exe inside extracted folder
       const walk = async (dir) => {
         for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
           const p = path.join(dir, e.name);
@@ -92,7 +94,6 @@ async function ensureFfmpeg() {
       return ffmpeg;
     }
 
-    // linux / mac: john van sickle static builds (linux amd64/arm64) — tar.xz
     if (PLATFORM === "linux") {
       const suffix = ARCH === "arm64" ? "arm64" : "amd64";
       const tar = path.join(BIN_DIR, "ffmpeg.tar.xz");
@@ -146,7 +147,7 @@ function run(cmd, args, cwd) {
 
 const app = express();
 app.use(cors({ origin: process.env.APP_ORIGIN || true }));
-app.use(express.json({ limit: "1kb" }));
+app.use(express.json({ limit: "4kb" }));
 app.disable("x-powered-by");
 
 // naive in-memory rate limit per IP
@@ -158,7 +159,7 @@ app.use((req, res, next) => {
   if (now > window.reset) window = { count: 0, reset: now + 60_000 };
   window.count++;
   hits.set(ip, window);
-  if (window.count > 30) return res.status(429).json({ error: "Too many requests — try again in a minute." });
+  if (window.count > 60) return res.status(429).json({ error: "Too many requests — try again in a minute." });
   next();
 });
 
@@ -181,9 +182,7 @@ function runYtDlp(args, timeoutMs = 90_000) {
       reject(new Error("timed out"));
     }, timeoutMs);
     child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => {
-      stderr = (stderr + d).slice(-4000);
-    });
+    child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
     child.on("error", (err) => {
       clearTimeout(timer);
       reject(new Error(`yt-dlp failed to start: ${err.message}`));
@@ -234,7 +233,6 @@ app.post("/api/info", async (req, res) => {
   const args = ["-J", "--no-playlist", "--no-warnings", "--no-check-certificates", req.body.url.trim()];
   try {
     const out = await runYtDlp(args, 120_000);
-    // stdout may contain only the JSON (warnings go to stderr)
     const start = out.indexOf("{");
     const info = JSON.parse(out.slice(start));
     const formats = (info.formats || [])
@@ -271,105 +269,252 @@ app.post("/api/info", async (req, res) => {
   }
 });
 
-/* --------------------------- download ---------------------------- */
+/* ------------------------------------------------------------------ */
+/* Download jobs (background download + live progress + delivery)      */
+/* ------------------------------------------------------------------ */
 
-app.get("/api/download", async (req, res) => {
+const JOBS = new Map(); // id -> job
+const MAX_ACTIVE = 3;
+const DONE_TTL_MS = 10 * 60 * 1000;
+
+function publicJob(job) {
+  return {
+    id: job.id,
+    status: job.status, // starting | downloading | converting | done | error | expired
+    percent: job.percent,
+    speed: job.speed,
+    eta: job.eta,
+    filename: job.status === "done" ? job.filename : null,
+    title: job.status === "done" ? job.title : null, // filled at end
+    error: job.status === "error" ? job.error : null,
+  };
+}
+
+function activeCount() {
+  let n = 0;
+  for (const job of JOBS.values()) {
+    if (["starting", "downloading", "converting"].includes(job.status)) n++;
+  }
+  return n;
+}
+
+function makeDownloadArgs(url, format, wantMp3) {
+  return [
+    "--newline",
+    "--progress",
+    "--quiet", // suppress banner lines; progress lines still print
+    "-f",
+    format,
+    "--no-playlist",
+    "--no-warnings",
+    "--no-mtime",
+    "--restrict-filenames",
+    "--no-part",
+    "-o",
+    "%(title).80B.%(ext)s",
+    ...(FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : []),
+    ...(wantMp3 ? ["-x", "--audio-format", "mp3", "--audio-quality", "0"] : []),
+    url,
+  ];
+}
+
+app.post("/api/download", async (req, res) => {
   try {
-    assertValidUrl(req.query.url);
+    assertValidUrl(req.body?.url);
   } catch (err) {
     return res.status(err.status || 400).json({ error: err.message });
   }
-  if (req.client?.destroyed) return;
-  const url = String(req.query.url).trim();
-  const format = typeof req.query.format === "string" && req.query.format ? req.query.format : "bv*+ba/b";
 
-  // refuse obviously bad format selectors
+  if (activeCount() >= MAX_ACTIVE) {
+    return res.status(429).json({ error: "Server is busy right now — try again shortly." });
+  }
+
+  const format = typeof req.body.format === "string" && req.body.format ? req.body.format : "bv*+ba/b";
   if (!/^[\w.+\-*/]{1,64}$/.test(format)) {
     return res.status(400).json({ error: "Invalid format id" });
   }
 
-  // MP3 mode: extract & convert best audio with ffmpeg
-  const wantMp3 = req.query.mp3 === "1" && !!FFMPEG_PATH;
-  const selectedFormat = wantMp3 ? (format === "auto" ? "ba/b" : format) : format;
-
-  if (wantMp3 && selectedFormat === "bv*+ba/b") {
-    return res.status(400).json({ error: "MP3 mode needs ffmpeg, which is unavailable" });
+  const wantMp3 = req.body.mp3 === true;
+  if (wantMp3 && !FFMPEG_PATH) {
+    return res.status(422).json({ error: "MP3 conversion needs FFmpeg, which is unavailable on the server" });
   }
 
-  const session = crypto.randomBytes(8).toString("hex");
-  const workDir = path.join(TMP_DIR, session);
+  const id = crypto.randomBytes(10).toString("hex");
+  const workDir = path.join(TMP_DIR, id);
   await fsp.mkdir(workDir, { recursive: true });
 
-  const cleanup = async () => {
-    if (res.writableEnded && !res.headersSent) res.status(500);
-    await fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  const job = {
+    id,
+    status: "starting",
+    percent: 0,
+    speed: "",
+    eta: "",
+    filename: null,
+    title: null,
+    error: null,
+    createdAt: Date.now(),
+    child: null,
+    workDir,
   };
+  JOBS.set(id, job);
 
-  req.on("close", () => {
-    if (!res.writableEnded) bestEffortKill();
+  const child = spawn(YTDLP_PATH, makeDownloadArgs(req.body.url.trim(), format, wantMp3), {
+    cwd: workDir,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  job.child = child;
+
+  let lineBuf = "";
+  child.stdout.on("data", (d) => {
+    lineBuf += d.toString();
+    const lines = lineBuf.split(/\r?\n/);
+    lineBuf = lines.pop(); // keep partial
+    for (const line of lines) handleYtDlpLine(job, line);
   });
 
-  let child = null;
-  const kill = () => child && child.pid && !child.killed && child.kill("SIGKILL");
-  const bestEffortKill = kill;
+  child.stderr.on("data", (d) => {
+    // some yt-dlp progress versions print to stderr with --quiet off; keep last error
+    job.lastStderr = (job.lastStderr || "") + d.toString();
+    if (job.lastStderr.length > 4000) job.lastStderr = job.lastStderr.slice(-4000);
+  });
 
-  const args = [
-    "-f",
-    selectedFormat,
-    "--no-playlist",
-    "--no-warnings",
-    "--no-mtime",
-    "-o",
-    path.join(workDir, "%(title).80B.%(ext)s"),
-    ...(FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : []),
-    ...(wantMp3 ? ["-x", "--audio-format", "mp3", "--audio-quality", "0"] : []),
-    "--restrict-filenames",
-    "--no-part",
-    url,
-  ];
+  child.on("error", (err) => {
+    job.status = "error";
+    job.error = `yt-dlp failed to start: ${err.message}`;
+  });
 
-  try {
-    await new Promise((resolve, reject) => {
-      child = spawn(YTDLP_PATH, args, { stdio: ["ignore", "ignore", "pipe"] });
-      let stderr = "";
-      child.stderr.on("data", (d) => (stderr = (stderr + d).slice(-4000)));
-      child.on("error", reject);
-      child.on("close", (code) =>
-        code === 0 ? resolve() : reject(new Error(cleanErr(stderr) || `yt-dlp exited ${code}`)),
-      );
-    });
-
-    const files = (await fsp.readdir(workDir)).filter((f) => !f.startsWith("."));
-    if (!files.length) throw new Error("Download produced no file");
-    const file = files[0];
-    const filePath = path.join(workDir, file);
-    const stat = await fsp.stat(filePath);
-
-    res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename*=UTF-8''${encodeURIComponent(file)}`,
-    );
-    if (res.req.httpVersionMajor === 1) res.setHeader("Content-Length", stat.size);
-
-    const stream = fs.createReadStream(filePath);
-    stream.on("error", async () => {
-      res.destroy();
-      await fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
-    });
-    res.on("close", () => {
-      stream.destroy();
+  child.on("close", async (code) => {
+    if (job.status === "error") return; // already set (cancelled)
+    if (code === 0) {
+      try {
+        const files = (await fsp.readdir(workDir)).filter((f) => !f.startsWith("."));
+        if (!files.length) throw new Error("Download produced no file");
+        job.filename = files[0];
+        job.title = job.filename;
+        job.percent = 100;
+        job.status = "done";
+        console.log(`[job ${id}] done -> ${job.filename}`);
+      } catch (err) {
+        job.status = "error";
+        job.error = err.message || "No file produced";
+      }
+    } else {
+      job.status = "error";
+      job.error = cleanErr(job.lastStderr || "") || `yt-dlp exited with code ${code}`;
+      // remove partial dir to save disk
       fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
-    });
-    stream.pipe(res);
-  } catch (err) {
-    kill();
-    await cleanup();
-    if (!res.headersSent) res.status(422).json({ error: err.message || "Download failed" });
-  }
+      job.workDir = null;
+    }
+  });
+
+  res.json({ id });
 });
 
-// Serve JSON (never HTML) for unknown routes
+function handleYtDlpLine(job, line) {
+  if (!line) return;
+
+  // [download]  43.9% of 10.26MiB at 2.31MiB/s ETA 00:02
+  const m = line.match(/\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+\w+)\s+at\s+([^\s]+)\s+ETA\s+([^\s]+)/);
+  if (m) {
+    const pct = parseFloat(m[1]);
+    if (pct >= job.percent || pct < job.percent - 5) {
+      // allow resets (multi-part formats)
+      job.percent = pct;
+    }
+    job.speed = m[3] === "Unknown" ? "" : m[3];
+    job.eta = m[4] === "Unknown" ? "" : m[4].startsWith("0:") ? m[4].slice(2) : m[4];
+    job.status = "downloading";
+    return;
+  }
+  if (line.startsWith("[Merger]") || line.startsWith("[ExtractAudio]")) {
+    job.status = "converting";
+    job.percent = 99;
+    return;
+  }
+  const dest = line.match(/\[download\]\s+Destination:\s*(.+)/);
+  if (dest) job.lastDest = dest[1];
+}
+
+/* ------------------------ cancel ------------------------------- */
+
+app.delete("/api/download/:id", async (req, res) => {
+  const job = JOBS.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Unknown job" });
+  if (!["starting", "downloading", "converting"].includes(job.status)) {
+    return res.status(409).json({ error: "Job already finished" });
+  }
+  job.status = "error";
+  job.error = "Cancelled";
+  if (job.child && !job.child.killed) job.child.kill("SIGKILL");
+  if (job.workDir) fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+  job.workDir = null;
+  res.json({ ok: true });
+});
+
+/* ------------------------ progress ------------------------------ */
+
+app.get("/api/progress/:id", (req, res) => {
+  const job = JOBS.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Unknown job" });
+  res.json(publicJob(job));
+});
+
+/* ------------------------- file delivery ------------------------- */
+
+app.get("/api/file/:id", async (req, res) => {
+  const job = JOBS.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Unknown job" });
+  if (job.status !== "done" || !job.filename || !job.workDir) {
+    return res.status(409).json({ error: "File not ready" });
+  }
+  const filePath = path.join(job.workDir, job.filename);
+  res.setHeader("Content-Type", "application/octet-stream");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename*=UTF-8''${encodeURIComponent(job.filename)}`,
+  );
+  if (req.httpVersionMajor === 1) res.setHeader("Content-Length", (await fsp.stat(filePath)).size);
+
+  const stream = fs.createReadStream(filePath);
+  const cleanup = () => {
+    stream.destroy();
+    fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+    job.workDir = null;
+    job.status = "expired"; // delivered once; client should re-download if needed
+    job.filename = null;
+  };
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      stream.destroy();
+      fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+      job.workDir = null;
+      job.status = "expired";
+    }
+  });
+  stream.on("end", cleanup);
+  stream.on("error", () => {
+    stream.destroy();
+    res.destroy();
+    fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+    job.workDir = null;
+  });
+  stream.pipe(res);
+});
+
+/* ------------------------ housekeeping --------------------------- */
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of JOBS) {
+    if (["done", "error", "expired"].includes(job.status) && now - job.createdAt > DONE_TTL_MS) {
+      if (job.workDir) fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+      JOBS.delete(id);
+    }
+  }
+}, 60_000);
+
+/* --------------- Serve JSON (never HTML) for unknown routes ---------------- */
+
 app.use((req, res) => res.status(404).json({ error: "Unknown endpoint" }));
 
 /* --------------------------- startup ----------------------------- */
@@ -387,7 +532,7 @@ async function main() {
   }
   try {
     FFMPEG_PATH = FFMPEG_PATH || (await ensureFfmpeg());
-    console.log(FFMPEG_PATH ? `[bin] ffmpeg: ${FFMPEG_PATH}` : "[bin] ffmpeg: not available (audio extraction disabled)");
+    console.log(FFMPEG_PATH ? `[bin] ffmpeg: ${FFMPEG_PATH}` : "[bin] ffmpeg: not available (audio conversion disabled)");
   } catch {}
   await fsp.mkdir(TMP_DIR, { recursive: true });
 
