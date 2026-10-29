@@ -8,6 +8,7 @@ import {
   Link2,
   Loader2,
   Music,
+  Play,
   ThumbsUp,
   Trash2,
   X,
@@ -23,7 +24,6 @@ import {
   type MediaInfo,
 } from "../api";
 import {
-  PLATFORMS,
   formatDate,
   formatCount,
   platformFromExtractor,
@@ -54,6 +54,34 @@ function fmtSize(bytes?: number | null, approx?: number | null): string {
   const mb = b / 1024 / 1024;
   const label = !exact && approx ? "~" : "";
   return `${label}${mb >= 1024 ? (mb / 1024).toFixed(2) + " GB" : mb.toFixed(mb < 10 ? 1 : 0) + " MB"}`;
+}
+
+function codecName(vcodec?: string | null, acodec?: string | null): string {
+  const v = (vcodec || "").toLowerCase();
+  const a = (acodec || "").toLowerCase();
+  if (v && v !== "none") {
+    if (v.includes("avc") || v.includes("h264")) return "H.264";
+    if (v.includes("hevc") || v.includes("hvc1") || v.includes("h265")) return "H.265";
+    if (v.includes("av01") || v.includes("av1")) return "AV1";
+    if (v.includes("vp9")) return "VP9";
+    if (v.includes("vp8")) return "VP8";
+    return v;
+  }
+  if (a && a !== "none") {
+    if (a.includes("mp4a")) return "AAC";
+    if (a.includes("opus")) return "Opus";
+    if (a.includes("mp3")) return "MP3";
+    if (a.includes("ec-3")) return "Dolby Digital";
+    if (a.includes("vorbis")) return "Vorbis";
+    if (a.includes("flac")) return "FLAC";
+    return a;
+  }
+  return "";
+}
+
+function parseMbps(kbps?: number | null): string {
+  if (!kbps) return "";
+  return kbps >= 1000 ? `${(kbps / 1000).toFixed(1)} Mbps` : `${Math.round(kbps)} kbps`;
 }
 
 /** Split all formats into well-defined groups. */
@@ -89,13 +117,26 @@ function useFormatGroups(info: MediaInfo | null) {
   }, [info]);
 }
 
+function sortExts(exts: string[]): string[] {
+  const pref = ["mp4", "webm", "mov", "mkv", "m4a", "mp3", "opus", "ogg", "wav"];
+  return [...exts].sort(
+    (a, b) => pref.indexOf(a) + 1 - (pref.indexOf(b) + 1) || a.localeCompare(b),
+  );
+}
+
 /* --------------------------- active downloads --------------------------- */
 
 type ActiveJob = Job & { label: string; delivered?: boolean };
 
+const CheckCircleGreen = () => (
+  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-green-400" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" opacity="0.4" />
+    <path d="m8.5 12.5 2.5 2.5 5-5.5" />
+  </svg>
+);
+
 function JobRow({ job, onCancel }: { job: ActiveJob; onCancel: (id: string) => void }) {
   const active = job.status === "starting" || job.status === "downloading" || job.status === "converting";
-  const delivered = job.status === "expired" || (job.status === "done" && job.delivered);
   const done = job.status === "done" && !job.delivered;
 
   return (
@@ -104,9 +145,8 @@ function JobRow({ job, onCancel }: { job: ActiveJob; onCancel: (id: string) => v
         {active && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-indigo-400" />}
         {job.status === "error" && <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />}
         {done && <CheckCircleGreen />}
-        {delivered && <CheckCircleMuted />}
 
-        <span className={`min-w-0 flex-1 truncate text-sm font-medium ${delivered ? "text-zinc-500" : "text-zinc-100"}`}>
+        <span className={`min-w-0 flex-1 truncate text-sm font-medium ${done ? "text-green-300" : "text-zinc-100"}`}>
           {job.status === "done" && job.filename ? job.filename : job.label}
         </span>
 
@@ -156,19 +196,6 @@ function JobRow({ job, onCancel }: { job: ActiveJob; onCancel: (id: string) => v
   );
 }
 
-const CheckCircleGreen = () => (
-  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-green-400" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" opacity="0.4" />
-    <path d="m8.5 12.5 2.5 2.5 5-5.5" />
-  </svg>
-);
-const CheckCircleMuted = () => (
-  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-zinc-700" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" opacity="0.4" />
-    <path d="m8.5 12.5 2.5 2.5 5-5.5" />
-  </svg>
-);
-
 /* --------------------------- detected platform chip --------------------------- */
 
 function DetectedChip({ platform }: { platform: Platform }) {
@@ -189,34 +216,36 @@ function DetectedChip({ platform }: { platform: Platform }) {
   );
 }
 
-/* ------------------------------ media info card ------------------------------ */
+/* ------------------------------ stat chip ------------------------------ */
 
-function StatChip({ icon: Icon, text }: { icon: React.ElementType; text?: string }) {
+function StatChip({ icon: Icon, tone, text }: { icon: React.ElementType; tone: string; text?: string }) {
   if (!text) return null;
   return (
     <span className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 px-2.5 py-1 text-xs font-medium text-zinc-300">
-      <Icon className="h-3.5 w-3.5 text-zinc-500" />
+      <Icon className="h-3.5 w-3.5" style={{ color: tone }} />
       {text}
     </span>
   );
 }
 
+/* ------------------------------ description ------------------------------ */
+
 function DescriptionBox({ html }: { html: string }) {
   const [expanded, setExpanded] = useState(false);
-  const short = html.length <= 180;
+  const short = html.length <= 160;
   return (
-    <div className="mt-3">
-      <div
+    <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3.5">
+      <p
         className={`whitespace-pre-line text-sm leading-relaxed text-zinc-400 ${
-          expanded ? "max-h-44 overflow-y-auto pr-2" : short ? "" : "line-clamp-2"
+          expanded ? "max-h-48 overflow-y-auto pr-2" : short ? "" : "line-clamp-2"
         }`}
       >
         {html}
-      </div>
+      </p>
       {!short && (
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="mt-1 text-xs font-semibold text-indigo-400 hover:text-indigo-300"
+          className="mt-1.5 text-xs font-bold text-indigo-400 transition hover:text-indigo-300"
         >
           {expanded ? "Show less ▲" : "Read more ▼"}
         </button>
@@ -225,12 +254,15 @@ function DescriptionBox({ html }: { html: string }) {
   );
 }
 
+/* ------------------------------ main ------------------------------ */
+
 export default function Downloader() {
   const [url, setUrl] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [info, setInfo] = useState<MediaInfo | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"video" | "audio">("video");
+  const [extFilter, setExtFilter] = useState<string>("all");
   const [jobs, setJobs] = useState<ActiveJob[]>([]);
   const jobsRef = useRef(jobs);
   jobsRef.current = jobs;
@@ -242,6 +274,23 @@ export default function Downloader() {
     () => detectPlatform(url.trim()) ?? platformFromExtractor(info?.extractor),
     [url, info],
   );
+
+  // extension tabs (dynamic, from actual formats)
+  const extTabs = useMemo(() => {
+    const videoExts = sortExts(
+      [...new Set([...groups.muxed, ...groups.videoOnly].map((f) => f.ext))].filter(Boolean),
+    );
+    const audioExts = sortExts([...new Set(groups.audio.map((f) => f.ext))].filter(Boolean));
+    return tab === "video"
+      ? ["all", ...videoExts]
+      : ["all", ...(groups.audio.length ? ["mp3"] : []), ...audioExts];
+  }, [tab, groups]);
+
+  // reset ext filter when switching tabs or analyzing a new link
+  useEffect(() => setExtFilter("all"), [tab]);
+  useEffect(() => {
+    if (phase === "ready") setExtFilter("all");
+  }, [info, phase]);
 
   useEffect(() => {
     return () => {
@@ -333,12 +382,20 @@ export default function Downloader() {
     void beginJob(options, label);
   }
 
-  const hasAudio = groups.audio.length > 0;
   const platformInfo = platformFromExtractor(info?.extractor) ?? detectedPlatform;
+  const channelName = info?.channel || info?.uploader || "";
+
+  // filtered lists honoring the ext tab
+  const fMuxed = groups.muxed.filter((f) => extFilter === "all" || f.ext === extFilter);
+  const fVideoOnly = groups.videoOnly.filter((f) => extFilter === "all" || f.ext === extFilter);
+  const fAudio = groups.audio.filter((f) => extFilter === "all" || f.ext === extFilter);
+  const showMp3Card = tab === "audio" && (extFilter === "all" || extFilter === "mp3") && groups.audio.length > 0;
 
   return (
     <div id="downloader" className="mx-auto w-full max-w-5xl scroll-mt-24">
-      <LogoTicker activeKey={detectedPlatform?.key ?? null} />
+      <div className="mb-8">
+        <LogoTicker activeKey={detectedPlatform?.key ?? null} />
+      </div>
 
       {!info && detectedPlatform && !error && <DetectedChip platform={detectedPlatform} />}
 
@@ -379,13 +436,13 @@ export default function Downloader() {
       {phase === "ready" && info && (
         <div className="mt-6 overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 shadow-2xl">
           {/* --- rich media header --- */}
-          <div className="grid gap-5 p-5 sm:grid-cols-[280px,1fr] lg:grid-cols-[320px,1fr]">
-            <div className="relative overflow-hidden rounded-xl bg-zinc-800 shadow-lg">
+          <div className="grid gap-5 p-5 sm:grid-cols-[300px,1fr]">
+            <div className="group relative overflow-hidden rounded-xl bg-zinc-800 shadow-lg ring-1 ring-white/5">
               {info.thumbnail ? (
                 <img
                   src={info.thumbnail}
                   alt=""
-                  className="aspect-video w-full object-cover"
+                  className="aspect-video w-full object-cover transition duration-500 group-hover:scale-105"
                   referrerPolicy="no-referrer"
                 />
               ) : (
@@ -393,8 +450,14 @@ export default function Downloader() {
                   <Film className="h-10 w-10 text-zinc-600" />
                 </div>
               )}
+              {/* hover play overlay */}
+              <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition duration-300 group-hover:bg-black/30">
+                <span className="grid h-14 w-14 place-items-center rounded-full bg-black/60 opacity-0 ring-1 ring-white/20 backdrop-blur transition duration-300 group-hover:opacity-100">
+                  <Play className="h-6 w-6 translate-x-0.5 fill-white text-white" />
+                </span>
+              </div>
               {info.duration != null && info.duration > 0 && (
-                <span className="absolute right-2 bottom-2 rounded-md bg-black/85 px-2 py-0.5 text-xs font-bold text-white">
+                <span className="absolute right-2.5 bottom-2.5 rounded-md bg-black/85 px-2 py-0.5 text-xs font-bold text-white">
                   {fmtDuration(info.duration)}
                 </span>
               )}
@@ -414,17 +477,20 @@ export default function Downloader() {
                 </button>
               </div>
 
-              {/* channel row */}
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                <span className="text-sm font-bold text-zinc-100">{info.channel || info.uploader}</span>
+              {/* channel row with avatar */}
+              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-sm font-black text-white uppercase">
+                  {channelName.trim().charAt(0) || "?"}
+                </span>
+                <span className="text-sm font-bold text-zinc-100">{channelName}</span>
                 {info.channel_subs != null && info.channel_subs > 0 && (
-                  <span className="text-sm text-zinc-500">
-                    · {formatCount(info.channel_subs)} subscribers
+                  <span className="rounded-md bg-zinc-800/80 px-2 py-0.5 text-xs font-semibold text-zinc-400">
+                    {formatCount(info.channel_subs)} subscribers
                   </span>
                 )}
                 {platformInfo && (
                   <span
-                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold"
+                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold"
                     style={{ backgroundColor: `${platformInfo.color}26`, color: platformInfo.color }}
                   >
                     <PlatformIcon platformKey={platformInfo.key} className="h-3 w-3" />
@@ -433,13 +499,14 @@ export default function Downloader() {
                 )}
               </div>
 
-              {/* stats chips */}
-              <div className="mt-3 flex flex-wrap gap-2">
-                <StatChip icon={Eye} text={info.view_count ? `${formatCount(info.view_count)} views` : ""} />
-                <StatChip icon={ThumbsUp} text={info.like_count ? `${formatCount(info.like_count)} likes` : ""} />
-                <StatChip icon={CalendarDays} text={formatDate(info.upload_date)} />
+              {/* stats chips with brand-tinted icons */}
+              <div className="mt-3.5 flex flex-wrap gap-2">
+                <StatChip icon={Eye} tone="#818cf8" text={info.view_count ? `${formatCount(info.view_count)} views` : ""} />
+                <StatChip icon={ThumbsUp} tone="#e879f9" text={info.like_count ? `${formatCount(info.like_count)} likes` : ""} />
+                <StatChip icon={CalendarDays} tone="#a5b4fc" text={formatDate(info.upload_date)} />
                 <StatChip
                   icon={Film}
+                  tone="#f0abfc"
                   text={`${groups.muxed.length + groups.videoOnly.length} video · ${groups.audio.length} audio`}
                 />
               </div>
@@ -448,79 +515,118 @@ export default function Downloader() {
             </div>
           </div>
 
-          {/* --- tabs --- */}
-          <div className="flex gap-2 border-t border-zinc-800 px-5 pt-3">
-            <button
-              onClick={() => setTab("video")}
-              className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-bold ${
-                tab === "video"
-                  ? "border-b-2 border-indigo-400 text-white"
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              <Film className="h-4 w-4" /> Video
-            </button>
-            <button
-              onClick={() => setTab("audio")}
-              className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-bold ${
-                tab === "audio"
-                  ? "border-b-2 border-fuchsia-400 text-white"
-                  : "text-zinc-500 hover:text-zinc-300"
-              }`}
-            >
-              <Music className="h-4 w-4" /> Audio
-            </button>
+          {/* --- main tabs --- */}
+          <div className="flex items-center justify-between border-t border-zinc-800 px-5 pt-3">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setTab("video")}
+                className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-bold ${
+                  tab === "video"
+                    ? "border-b-2 border-indigo-400 text-white"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <Film className="h-4 w-4" /> Video
+              </button>
+              <button
+                onClick={() => setTab("audio")}
+                className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-bold ${
+                  tab === "audio"
+                    ? "border-b-2 border-fuchsia-400 text-white"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                <Music className="h-4 w-4" /> Audio
+              </button>
+            </div>
+          </div>
+
+          {/* --- extension filter tabs --- */}
+          <div className="flex flex-wrap gap-2 border-t border-zinc-800 bg-zinc-950/40 px-5 py-3">
+            {extTabs.map((ext) => {
+              const active = extFilter === ext;
+              const accent = tab === "video" ? "#6366f1" : "#d946ef";
+              return (
+                <button
+                  key={ext}
+                  onClick={() => setExtFilter(ext)}
+                  style={active ? { backgroundColor: accent, borderColor: accent } : undefined}
+                  className={`rounded-lg border px-3 py-1 text-xs font-extrabold tracking-widest uppercase transition ${
+                    active ? "text-white shadow-lg" : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
+                  }`}
+                >
+                  {ext === "all" ? "All" : ext}
+                </button>
+              );
+            })}
           </div>
 
           {/* --- formats --- */}
-          <div className="max-h-96 divide-y divide-zinc-800/60 overflow-y-auto border-t border-zinc-800">
-            {tab === "video" && groups.muxed.length > 0 && (
-              <FormatSection
-                heading="Ready to play (video + audio in one file)"
-                items={groups.muxed}
-                labelOf={(f) => (f.height ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""} ${f.ext}` : f.format_id)}
-                url={url.trim()}
-                onClick={rowClick}
-              />
-            )}
-            {tab === "video" && groups.muxed.length === 0 && (
-              <p className="px-5 py-3 text-sm text-zinc-500">
-                This video streams "video + audio" separately. Pick a quality below — we'll
-                merge it with the best audio track automatically.
-              </p>
-            )}
-            {tab === "video" && groups.videoOnly.length > 0 && (
-              <FormatSection
-                heading="Higher qualities (merged automatically)"
-                items={groups.videoOnly}
-                labelOf={(f) => (f.height ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""} ${f.ext}` : f.format_id)}
-                url={url.trim()}
-                onClick={rowClick}
-              />
+          <div className="divide-y divide-zinc-800/60 border-t border-zinc-800">
+            {tab === "video" && (
+              <>
+                {fMuxed.length > 0 && (
+                  <FormatSection
+                    heading="Ready to play (video + audio in one file)"
+                    items={fMuxed}
+                    labelOf={(f) => (f.height ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""}` : f.format_id)}
+                    subOf={(f) => [codecName(f.vcodec), parseMbps(f.tbr)].filter(Boolean).join(" · ")}
+                    url={url.trim()}
+                    onClick={rowClick}
+                  />
+                )}
+                {fMuxed.length === 0 && fVideoOnly.length === 0 && extFilter === "all" && (
+                  <p className="px-5 py-3 text-sm text-zinc-500">
+                    No video formats available for this link — try the Audio tab.
+                  </p>
+                )}
+                {fMuxed.length === 0 && extFilter === "all" && fVideoOnly.length > 0 && (
+                  <p className="bg-zinc-950/60 px-5 py-3 text-xs text-zinc-500">
+                    This video streams "video + audio" separately. Pick a quality — we'll merge it
+                    with the best audio track automatically.
+                  </p>
+                )}
+                {fVideoOnly.length > 0 && (
+                  <FormatSection
+                    heading="Higher qualities (merged automatically)"
+                    items={fVideoOnly}
+                    labelOf={(f) => (f.height ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""}` : f.format_id)}
+                    subOf={(f) => [codecName(f.vcodec), parseMbps(f.tbr)].filter(Boolean).join(" · ")}
+                    url={url.trim()}
+                    onClick={rowClick}
+                  />
+                )}
+              </>
             )}
 
             {tab === "audio" && (
               <>
-                <button
-                  onClick={(e) => {
-                    e.preventDefault();
-                    void beginJob({ url: url.trim(), format: "ba/b", mp3: true }, "MP3 · best quality");
-                  }}
-                  className="flex w-full items-center gap-3 bg-gradient-to-r from-fuchsia-950/40 to-indigo-950/40 px-5 py-3 text-left transition hover:brightness-125"
-                >
-                  <span className="flex h-9 w-16 items-center justify-center rounded-md bg-fuchsia-600/90 text-sm font-bold text-white">
-                    mp3
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-base font-bold text-white">
-                    MP3 — best quality (converted with FFmpeg)
-                  </span>
-                  <Download className="h-5 w-5 shrink-0 text-fuchsia-400" />
-                </button>
-                {hasAudio && (
+                {showMp3Card && (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void beginJob({ url: url.trim(), format: "ba/b", mp3: true }, "MP3 · best quality");
+                    }}
+                    className="flex w-full items-center gap-4 bg-gradient-to-r from-fuchsia-950/40 to-indigo-950/40 px-5 py-3 text-left transition hover:brightness-125"
+                  >
+                    <span className="flex h-9 w-16 items-center justify-center rounded-lg bg-fuchsia-600/90 text-sm font-bold text-white">
+                      mp3
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-base font-bold text-white">
+                        MP3 — best quality
+                      </span>
+                      <span className="block text-xs text-zinc-400">converted with FFmpeg · 320 kbps</span>
+                    </span>
+                    <Download className="h-5 w-5 shrink-0 text-fuchsia-400" />
+                  </button>
+                )}
+                {fAudio.length > 0 && (
                   <FormatSection
                     heading="Original audio formats"
-                    items={groups.audio}
-                    labelOf={(f) => (f.abr ? `${Math.round(f.abr)} kbps ${f.ext}` : `${f.ext}`)}
+                    items={fAudio}
+                    labelOf={(f) => (f.abr ? `${Math.round(f.abr)} kbps` : "Best available quality")}
+                    subOf={(f) => [codecName(null, f.acodec), parseMbps(f.tbr), f.ext].filter(Boolean).join(" · ")}
                     url={url.trim()}
                     onClick={rowClick}
                   />
@@ -555,43 +661,59 @@ function FormatSection({
   heading,
   items,
   labelOf,
+  subOf,
   url,
   onClick,
 }: {
   heading: string;
   items: MediaFormat[];
   labelOf: (f: MediaFormat) => string;
+  subOf?: (f: MediaFormat) => string;
   url: string;
   onClick: (e: React.MouseEvent, opts: { url: string; format?: string }, label: string) => void;
 }) {
   return (
     <div>
-      <p className="sticky top-0 z-10 bg-zinc-900/95 px-5 py-2 text-[11px] font-bold tracking-widest text-zinc-500 uppercase backdrop-blur">
+      <p className="bg-zinc-900/95 px-5 py-2 text-[11px] font-bold tracking-widest text-zinc-500 uppercase">
         {heading}
       </p>
-      {items.map((f, i) => {
-        const isBest = i === 0;
+      {items.map((f) => {
+        const label = labelOf(f);
+        const sub = subOf?.(f) || "";
         return (
           <a
             key={f.format_id}
             href={`/api/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(f.format_id)}`}
-            onClick={(e) => onClick(e, { url, format: f.format_id }, labelOf(f))}
+            onClick={(e) => onClick(e, { url, format: f.format_id }, label)}
             className="group flex items-center gap-4 bg-zinc-900/30 px-5 py-3 transition hover:bg-zinc-800/70"
           >
             <span
-              className={`flex h-9 w-16 items-center justify-center rounded-lg text-sm font-extrabold tracking-wide uppercase ${
-                isBest ? "bg-indigo-500/30 text-indigo-300" : "bg-zinc-800 text-zinc-300"
+              className={`flex h-10 w-16 items-center justify-center rounded-lg text-sm font-extrabold tracking-wide uppercase ${
+                f.ext === "mp4"
+                  ? "bg-indigo-500/25 text-indigo-300"
+                  : f.ext === "webm"
+                    ? "bg-red-500/20 text-red-300"
+                    : f.ext === "mp3"
+                      ? "bg-fuchsia-500/25 text-fuchsia-300"
+                      : "bg-zinc-800 text-zinc-300"
               }`}
             >
               {f.ext}
             </span>
-            <span className="min-w-0 flex-1 truncate text-base font-semibold text-zinc-100">
-              {labelOf(f)}
-              {isBest && <span className="ml-2 rounded bg-indigo-500/20 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-indigo-300">BEST</span>}
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-base font-bold text-zinc-100">
+                {label}
+                {f.height && (f.height ?? 0) >= 1080 && (
+                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-extrabold tracking-wider text-emerald-400">
+                    HD
+                  </span>
+                )}
+              </span>
+              {sub && <span className="block truncate text-xs text-zinc-500">{sub}</span>}
             </span>
             <span className="text-sm text-zinc-500">{fmtSize(f.filesize, f.filesize_approx)}</span>
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-600 transition group-hover:bg-indigo-500 group-hover:text-white">
-              <Download className="h-4.5 w-4.5" />
+              <Download className="h-4 w-4" />
             </span>
           </a>
         );

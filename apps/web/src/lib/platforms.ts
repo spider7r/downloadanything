@@ -24,6 +24,9 @@ export const PLATFORMS: Platform[] = [
   { key: "rumble", name: "Rumble", match: /rumble\.com/i, color: "#85C742", extractors: ["Rumble"] },
   { key: "vk", name: "VK", match: /vk\.com|vk\.ru/i, color: "#0077FF", extractors: ["VK", "Vk"] },
   { key: "tumblr", name: "Tumblr", match: /tumblr\.com/i, color: "#36465D", extractors: ["Tumblr"] },
+  { key: "snapchat", name: "Snapchat", match: /snapchat\.com/i, color: "#FFFC00", extractors: ["Snapchat"] },
+  { key: "threads", name: "Threads", match: /threads\.(net|com)/i, color: "#E7E9EA", extractors: ["Threads"] },
+  { key: "bluesky", name: "Bluesky", match: /bsky\.app/i, color: "#4C9EFF", extractors: ["Bluesky"] },
 ];
 
 /** Detect the platform from a (possibly partially typed) URL, or null if unknown. */

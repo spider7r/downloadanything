@@ -39,3 +39,13 @@ body {
 .animate-ticker {
   animation: ticker 45s linear infinite;
 }
+
+/* Supported-sites cards: light up in the platform's brand color on hover */
+.plat-card:hover {
+  border-color: color-mix(in srgb, var(--brand) 55%, #27272a);
+  box-shadow: 0 8px 30px -12px color-mix(in srgb, var(--brand) 70%, transparent);
+}
+
+.plat-card:hover .plat-logo {
+  color: var(--brand);
+}

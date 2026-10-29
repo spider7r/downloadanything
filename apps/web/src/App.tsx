@@ -60,7 +60,7 @@ function Hero() {
           X and thousands of other sites.
         </p>
       </div>
-      <div className="relative mt-10">
+      <div className="relative mt-14">
         <Downloader />
       </div>
     </section>
@@ -69,37 +69,58 @@ function Hero() {
 
 const STEPS = [
   {
+    n: "01",
     icon: MousePointerClick,
-    title: "1 · Paste the link",
-    text: "Copy any video URL and drop it into the box above.",
+    title: "Paste the link",
+    text: "Copy any video URL — we auto-detect the platform instantly.",
   },
   {
+    n: "02",
     icon: SlidersHorizontal,
-    title: "2 · Choose your quality",
-    text: "Pick a resolution up to 4K, or extract the audio as MP3.",
+    title: "Choose your quality",
+    text: "Pick any resolution up to 4K, or extract the audio as MP3.",
   },
   {
+    n: "03",
     icon: FolderDown,
-    title: "3 · Save the file",
+    title: "Save the file",
     text: "Watch live progress — the browser saves the finished file automatically.",
   },
 ];
 
 function HowItWorks() {
   return (
-    <section id="how" className="mx-auto max-w-6xl px-4 py-16">
+    <section id="how" className="mx-auto max-w-6xl scroll-mt-20 px-4 py-16">
       <h2 className="text-center text-3xl font-bold text-white">How it works</h2>
-      <div className="mt-10 grid gap-4 md:grid-cols-3">
-        {STEPS.map(({ icon: Icon, title, text }) => (
+      <p className="mx-auto mt-3 max-w-xl text-center text-zinc-400">
+        Three steps. No signup, no ads-wall, no waiting rooms.
+      </p>
+      <div className="relative mt-12 grid gap-6 md:grid-cols-3">
+        {/* connector line */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute top-12 right-[16%] left-[16%] hidden border-t-2 border-dashed border-zinc-800 md:block"
+        />
+        {STEPS.map(({ n, icon: Icon, title, text }) => (
           <div
-            key={title}
-            className="relative rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 text-left"
+            key={n}
+            className="group relative overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 transition duration-300 hover:-translate-y-1.5 hover:border-zinc-600 hover:shadow-xl hover:shadow-indigo-500/5"
           >
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20">
-              <Icon className="h-5 w-5 text-indigo-400" />
+            {/* giant watermark number */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute -top-7 right-0 bg-gradient-to-b from-zinc-700/40 to-transparent bg-clip-text text-[7rem] leading-none font-black text-transparent select-none"
+            >
+              {n}
+            </span>
+            {/* gradient icon tile */}
+            <div className="relative grid h-13 w-13 place-items-center rounded-2xl bg-gradient-to-br from-indigo-500 to-fuchsia-600 shadow-lg shadow-indigo-500/30 transition duration-300 group-hover:scale-110 group-hover:rotate-3">
+              <Icon className="h-6 w-6 text-white" />
             </div>
-            <h3 className="mt-4 font-semibold text-white">{title}</h3>
-            <p className="mt-1.5 text-sm text-zinc-400">{text}</p>
+            <h3 className="relative mt-5 text-lg font-bold text-white">{title}</h3>
+            <p className="relative mt-2 text-sm text-zinc-400">{text}</p>
+            {/* bottom accent line */}
+            <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-indigo-500 to-fuchsia-500 opacity-0 transition duration-300 group-hover:opacity-100" />
           </div>
         ))}
       </div>
@@ -119,12 +140,13 @@ function SupportedGrid() {
         {PLATFORMS.map((p) => (
           <div
             key={p.key}
-            className="group flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 transition hover:border-zinc-600"
+            style={{ ["--brand" as string]: p.color }}
+            className="plat-card group flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 transition duration-300 hover:-translate-y-0.5 hover:bg-zinc-900"
           >
-            <span className="grid h-8 w-8 shrink-0 place-items-center text-zinc-500 transition-colors group-hover:text-white" style={{}}>
-              <PlatformIcon platformKey={p.key} className="h-6 w-6 group-hover:scale-110" />
+            <span className="plat-logo grid h-8 w-8 shrink-0 place-items-center text-zinc-500 transition-all duration-300">
+              <PlatformIcon platformKey={p.key} className="h-6 w-6 transition-transform duration-300 group-hover:scale-110" />
             </span>
-            <span className="truncate text-sm font-semibold text-zinc-300">{p.name}</span>
+            <span className="truncate text-sm font-semibold text-zinc-300 group-hover:text-white">{p.name}</span>
           </div>
         ))}
       </div>
