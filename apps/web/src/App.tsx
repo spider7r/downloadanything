@@ -1,9 +1,9 @@
 import {
-  Desktop,
   Download,
   FastForward,
   FolderDown,
   ListChecks,
+  Monitor,
   MousePointerClick,
   ShieldCheck,
   SlidersHorizontal,
@@ -164,7 +164,7 @@ const FEATURES = [
     text: "All available resolutions and audio formats — clearly grouped, one click to start.",
   },
   {
-    icon: Desktop,
+    icon: Monitor,
     title: "Windows desktop app",
     text: "Queue playlists, convert to MP3 and manage a library with our native app.",
   },
@@ -192,7 +192,7 @@ function WindowsApp() {
   return (
     <section id="windows" className="mx-auto max-w-6xl scroll-mt-20 px-4 pb-20">
       <div className="glow relative overflow-hidden rounded-3xl border border-zinc-800 bg-gradient-to-br from-indigo-950/60 via-zinc-950 to-fuchsia-950/40 p-10 text-center sm:p-14">
-        <Desktop className="mx-auto h-8 w-8 text-fuchsia-400" />
+        <Monitor className="mx-auto h-8 w-8 text-fuchsia-400" />
         <h2 className="mt-4 text-3xl font-bold text-white">Prefer a desktop app?</h2>
         <p className="mx-auto mt-3 max-w-lg text-zinc-400">
           Get <b className="text-zinc-200">Download Anything for Windows</b> — batch playlists,
