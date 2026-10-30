@@ -366,6 +366,7 @@ function sunoInfoResponse(songs, reqUrl) {
     channel: s.creator || s.handle,
     channel_subs: null,
     channel_avatar: s.avatar || null,
+    channel_url: s.handle ? `https://suno.com/@${s.handle}` : null,
     channel_followers: null,
     channel_following: null,
     channel_verified: null,
@@ -395,7 +396,7 @@ async function unavatar(provider, username) {
 }
 
 async function enrichChannel(pageUrl, info) {
-  const extra = { avatar: null, followers: null, following: null, verified: null };
+  const extra = { avatar: null, followers: null, following: null, verified: null, url: null, private: null };
   try {
     const u = new URL(pageUrl);
     const host = u.hostname.replace(/^www\./, "");
@@ -404,6 +405,9 @@ async function enrichChannel(pageUrl, info) {
     if (info.uploader_thumbnail) extra.avatar = info.uploader_thumbnail;
     if (info.channel_thumbnail && !extra.avatar) extra.avatar = info.channel_thumbnail;
     if (info.user_thumbnail && !extra.avatar) extra.avatar = info.user_thumbnail;
+    // Creators' own profile link when the extractor publishes it
+    if (info.uploader_url) extra.url = info.uploader_url;
+    else if (info.channel_url) extra.url = info.channel_url;
 
     if (/youtube\./.test(host)) {
       // channel avatar lives in the watch page's owner renderer
@@ -448,16 +452,27 @@ async function enrichChannel(pageUrl, info) {
         }
         if (getUser) {
           extra.avatar = getUser.profile_pic_url || getUser.profile_pic_url_hd || null;
-          extra.followers = getUser.edge_followed_by?.count ?? null;
-          extra.following = getUser.edge_follow?.count ?? null;
+          if (getUser.is_private) {
+            // Private accounts hide follower/following data from logged-out visitors.
+            extra.private = true;
+            extra.following = "Private";
+          } else {
+            extra.followers = getUser.edge_followed_by?.count ?? null;
+            extra.following = getUser.edge_follow?.count ?? null;
+          }
           extra.verified = getUser.is_verified ?? null;
+          if (getUser.username) extra.url = `https://www.instagram.com/${getUser.username}/`;
         } else {
           extra.avatar = await unavatar("instagram", igUser);
+          extra.following = "Private";
         }
+        if (!extra.url && igUser) extra.url = `https://www.instagram.com/${igUser}/`;
       }
     } else if (/tiktok\./.test(host)) {
-      const handle = (info.uploader || u.pathname.match(/@([\w.]+)/)?.[1] || "").replace(/^@/, "");
+      const handle =
+        (info.uploader_id || info.uploader || u.pathname.match(/@([\w.]+)/)?.[1] || "").replace(/^@/, "");
       if (handle) {
+        extra.url = `https://www.tiktok.com/@${handle}`;
         try {
           const page = await safeNav(`https://www.tiktok.com/@${handle}`, {
             headers: { "User-Agent": UA_PAGE, "Accept-Language": "en-US,en;q=0.9" },
@@ -467,6 +482,11 @@ async function enrichChannel(pageUrl, info) {
             extra.avatar ??= flat.match(/"avatarLarger":"([^"]+)"/)?.[1] || null;
             extra.followers ??= Number(flat.match(/"followerCount":(\d+)/)?.[1]) || null;
             extra.following ??= Number(flat.match(/"followingCount":(\d+)/)?.[1]) || null;
+            if (/"privateAccount":true/.test(flat)) {
+              extra.private = true;
+              extra.following = "Private";
+            }
+            extra.verified ??= /"verified":true/.test(flat) ? true : null;
           }
         } catch {
           /* best effort */
@@ -476,6 +496,7 @@ async function enrichChannel(pageUrl, info) {
     } else if (/bsky\.app/.test(host)) {
       const handle = u.pathname.match(/\/profile\/([^/]+)/)?.[1];
       if (handle) {
+        extra.url = `https://bsky.app/profile/${handle}`;
         try {
           const didRes = await safeNav(
             `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`,
@@ -503,14 +524,24 @@ async function enrichChannel(pageUrl, info) {
         (info.uploader || "").replace(/^@/, "") ||
         u.pathname.match(/profile\.php\?id=(\d+)/)?.[1] ||
         null;
+      if (!extra.url && fbUser) extra.url = `https://www.facebook.com/${fbUser}/`;
       extra.avatar = await unavatar("facebook", fbUser);
     } else if (/(^|\.)(x|twitter)\.com/.test(host)) {
-      extra.avatar = await unavatar("twitter", (info.uploader || "").replace(/^@/, ""));
-    } else if (/reddit\.com/.test(host)) {
-      const rd =
-        (info.uploader || "").replace(/^u\//, "") ||
-        (u.pathname.match(/\/user\/([\w-]+)/) || [])[1] ||
+      const xUser =
+        (info.uploader_id || info.uploader || "").replace(/^@/, "") ||
+        u.pathname.match(/\/(@?[\w]+)(?:\/|$)/)?.[1]?.replace(/^@/, "") ||
         null;
+      if (xUser && !extra.url) extra.url = `https://x.com/${xUser}`;
+      // "x" provider (unavatar's "twitter" path is legacy); PATCH verified live
+      extra.avatar = await unavatar("x", xUser);
+    } else if (/reddit\.com/.test(host)) {
+      const sub = (u.pathname.match(/\/r\/([\w-]+?)(?:\/|$)/) || [])[1] || null;
+      const rd = sub || (info.uploader || "").replace(/^u\//, "") || (u.pathname.match(/\/user\/([\w-]+)/) || [])[1] || null;
+      extra.url = sub
+        ? `https://www.reddit.com/r/${sub}/`
+        : rd
+          ? `https://www.reddit.com/user/${rd}/`
+          : extra.url;
       extra.avatar = await unavatar("reddit", rd);
     }
   } catch {
@@ -586,7 +617,9 @@ app.post("/api/info", async (req, res) => {
       channel_avatar: extra.avatar,
       channel_followers: extra.followers,
       channel_following: extra.following,
-      channel_verified: extra.verified,
+      channel_verified: extra.verified ?? info.channel_is_verified ?? null,
+      channel_url: extra.url ?? null,
+      channel_private: extra.private ?? null,
       description:
         typeof info.description === "string" ? info.description.slice(0, 900) : null,
       view_count: info.view_count ?? null,

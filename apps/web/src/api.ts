@@ -24,6 +24,7 @@ export type MediaInfo = {
   channel_followers?: number | null;
   channel_following?: number | string | null;
   channel_verified?: boolean | null;
+  channel_private?: boolean | null;
   channel_likes?: number | null;
   description?: string | null;
   view_count?: number | null;
