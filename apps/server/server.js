@@ -202,6 +202,61 @@ function runYtDlp(args, timeoutMs = 90_000) {
   });
 }
 
+/* Translate engine errors into honest, human guidance. */
+function friendlyError(msg) {
+  if (!msg) return "Something went wrong while processing this link";
+  if (/ip address is blocked|blocked from accessing|rate.?limit/i.test(msg)) {
+    return "This platform blocks requests from cloud/server IPs and only serves real connections. The upcoming Windows desktop app downloads from your own connection and bypasses this — try it there, or retry in a few minutes.";
+  }
+  if (/login|sign in|log in|cookies|authenticate|empty media response|private video|not available in your country/i.test(msg)) {
+    return "This content needs a logged-in session — we even retried with your browser's cookies without success from this connection. The upcoming Windows desktop app handles this natively. Public posts still work.";
+  }
+  if (/unsupported url|not a valid url|is not a valid/i.test(msg)) {
+    return "We couldn't recognize this link. Paste a direct link to the video/post from a supported platform.";
+  }
+  if (/timed out/i.test(msg)) {
+    return "The platform took too long to respond — please try again.";
+  }
+  if (/http error 5\d\d/i.test(msg)) {
+    return "The platform is having temporary server trouble — please try again in a minute.";
+  }
+  return msg
+    .replace(/^ERROR:\s*\[[^\]]+\]\s*/i, "")
+    .replace(/\s*See https:\S+.*$/i, "")
+    .replace(/\.\s*Otherwise, if .*$/is, "")
+    .trim();
+}
+
+/* Auth/IP walls (Instagram, TikTok, …) often unlock with the user's own logged-in
+ * browser session — yt-dlp's own recommendation. Retry once with cookies.      */
+const AUTH_WALL_RE =
+  /login|sign in|cookies|rate.?limit|empty media response|ip address is blocked|blocked from accessing|authenticate|use --cookies|private video|not available in your country/i;
+const COOKIE_BROWSERS = ["chrome", "edge", "firefox", "brave", "opera"];
+
+function isAuthWall(msg) {
+  return !!msg && AUTH_WALL_RE.test(msg);
+}
+
+async function runYtDlpSmart(args, timeoutMs = 90_000) {
+  try {
+    return await runYtDlp(args, timeoutMs);
+  } catch (err) {
+    if (!isAuthWall(err?.message)) throw err;
+    for (const browser of COOKIE_BROWSERS) {
+      try {
+        console.log(`[info] auth wall — retrying with ${browser} cookies…`);
+        return await runYtDlp([...args, "--cookies-from-browser", browser], timeoutMs);
+      } catch (retryErr) {
+        // DPAPI/missing-browser errors → try the next browser; real content errors → stop
+        if (!/decrypt|dpapi|could not find|failed to (copy|find)|does not exist/i.test(retryErr?.message || "")) {
+          throw retryErr;
+        }
+      }
+    }
+    throw err;
+  }
+}
+
 function cleanErr(msg) {
   if (!msg) return "";
   return msg
@@ -583,7 +638,7 @@ app.post("/api/info", async (req, res) => {
 
   const args = ["-J", "--no-playlist", "--no-warnings", "--no-check-certificates", url];
   try {
-    const out = await runYtDlp(args, 120_000);
+    const out = await runYtDlpSmart(args, 120_000);
     const start = out.indexOf("{");
     const info = JSON.parse(out.slice(start));
     const formats = (info.formats || [])
@@ -600,7 +655,11 @@ app.post("/api/info", async (req, res) => {
         vcodec: f.vcodec || null,
         acodec: f.acodec || null,
         filesize: f.filesize || null,
-        filesize_approx: f.filesize_approx || null,
+        // Estimate size from bitrate × duration when yt-dlp publishes neither —
+        // users should never see a made-up number, only an honest approximation.
+        filesize_approx:
+          f.filesize_approx ||
+          (f.tbr && info.duration ? Math.round((f.tbr * 1000 * info.duration) / 8) : null),
         tbr: f.tbr || null,
         abr: f.abr || null,
         format_note: f.format_note || null,
@@ -632,7 +691,7 @@ app.post("/api/info", async (req, res) => {
       formats,
     });
   } catch (err) {
-    res.status(422).json({ error: err.message || "Could not analyze this link" });
+    res.status(422).json({ error: err.message === "timed out" ? friendlyError("timed out") : friendlyError(err.message || "Could not analyze this link") });
   }
 });
 
@@ -859,54 +918,86 @@ app.post("/api/download", async (req, res) => {
     }
   }
 
-  const child = spawn(YTDLP_PATH, makeDownloadArgs(targetUrl, format, wantMp3), {
-    cwd: workDir,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  job.child = child;
+  // First attempt without cookies; retry with the user's logged-in browser
+  // cookies when a platform closes the download with an auth/IP wall.
+  let attemptIdx = 0; // 0 = plain attempt; n = COOKIE_BROWSERS[n-1] cookies
+  const run = () => {
+    const args = [...makeDownloadArgs(targetUrl, format, wantMp3)];
+    if (attemptIdx > 0) {
+      job.cookieBrowser = COOKIE_BROWSERS[attemptIdx - 1];
+      args.push("--cookies-from-browser", job.cookieBrowser);
+    }
+    const child = spawn(YTDLP_PATH, args, {
+      cwd: workDir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    job.child = child;
 
-  let lineBuf = "";
-  child.stdout.on("data", (d) => {
-    lineBuf += d.toString();
-    const lines = lineBuf.split(/\r?\n/);
-    lineBuf = lines.pop(); // keep partial
-    for (const line of lines) handleYtDlpLine(job, line);
-  });
+    let lineBuf = "";
+    child.stdout.on("data", (d) => {
+      lineBuf += d.toString();
+      const lines = lineBuf.split(/\r?\n/);
+      lineBuf = lines.pop(); // keep partial
+      for (const line of lines) handleYtDlpLine(job, line);
+    });
 
-  child.stderr.on("data", (d) => {
-    // some yt-dlp progress versions print to stderr with --quiet off; keep last error
-    job.lastStderr = (job.lastStderr || "") + d.toString();
-    if (job.lastStderr.length > 4000) job.lastStderr = job.lastStderr.slice(-4000);
-  });
+    child.stderr.on("data", (d) => {
+      // some yt-dlp progress versions print to stderr with --quiet off; keep last error
+      job.lastStderr = (job.lastStderr || "") + d.toString();
+      if (job.lastStderr.length > 4000) job.lastStderr = job.lastStderr.slice(-4000);
+    });
 
-  child.on("error", (err) => {
-    job.status = "error";
-    job.error = `yt-dlp failed to start: ${err.message}`;
-  });
-
-  child.on("close", async (code) => {
-    if (job.status === "error") return; // already set (cancelled)
-    if (code === 0) {
-      try {
-        const files = (await fsp.readdir(workDir)).filter((f) => !f.startsWith("."));
-        if (!files.length) throw new Error("Download produced no file");
-        job.filename = files[0];
-        job.title = job.filename;
-        job.percent = 100;
-        job.status = "done";
-        console.log(`[job ${id}] done -> ${job.filename}`);
-      } catch (err) {
-        job.status = "error";
-        job.error = err.message || "No file produced";
-      }
-    } else {
+    child.on("error", (err) => {
       job.status = "error";
-      job.error = cleanErr(job.lastStderr || "") || `yt-dlp exited with code ${code}`;
+      job.error = `yt-dlp failed to start: ${err.message}`;
+    });
+
+    child.on("close", (code) => {
+      if (job.status === "error") return; // already set (cancelled)
+      if (code === 0) {
+        fsp
+          .readdir(workDir)
+          .then((files) => files.filter((f) => !f.startsWith(".")))
+          .then((files) => {
+            if (!files.length) throw new Error("Download produced no file");
+            job.filename = files[0];
+            job.title = job.filename;
+            job.percent = 100;
+            job.status = "done";
+            console.log(`[job ${id}] done -> ${job.filename}`);
+          })
+          .catch((err) => {
+            job.status = "error";
+            job.error = err.message || "No file produced";
+          });
+        return;
+      }
+
+      const rawErr = cleanErr(job.lastStderr || "") || `yt-dlp exited with code ${code}`;
+      // Cookie extraction itself failed (DPAPI/missing browser) → keep trying others
+      const cookieToolingErr = /decrypt|dpapi|could not find|failed to (copy|find)|does not exist/i.test(rawErr);
+      const mayRetry =
+        (attemptIdx === 0 && isAuthWall(rawErr)) ||
+        (attemptIdx > 0 && cookieToolingErr && attemptIdx < COOKIE_BROWSERS.length);
+      if (mayRetry) {
+        attemptIdx += 1;
+        job.lastStderr = "";
+        job.status = "starting";
+        job.percent = 0;
+        console.log(`[job ${id}] auth wall — retrying with browser cookies`);
+        run();
+        return;
+      }
+
+      job.status = "error";
+      job.error = friendlyError(rawErr);
       // remove partial dir to save disk
       fsp.rm(workDir, { recursive: true, force: true }).catch(() => {});
       job.workDir = null;
-    }
-  });
+    });
+  };
+
+  run();
 
   res.json({ id });
 });
