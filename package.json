@@ -3,10 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "description": "Download Anything — free online & desktop media downloader",
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "dev:web": "pnpm --filter @da/web dev",
-    "build:web": "pnpm --filter @da/web build",
-    "dev:server": "pnpm --filter @da/server dev",
-    "start:server": "pnpm --filter @da/server start"
+    "dev": "concurrently -n \"server,web\" -c \"green,cyan\" \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:web": "npm run dev --workspace=@da/web",
+    "build:web": "npm run build --workspace=@da/web",
+    "dev:server": "npm run dev --workspace=@da/server",
+    "start:server": "npm run start --workspace=@da/server"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6"
   }
 }

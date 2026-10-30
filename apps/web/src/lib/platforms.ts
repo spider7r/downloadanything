@@ -27,6 +27,7 @@ export const PLATFORMS: Platform[] = [
   { key: "snapchat", name: "Snapchat", match: /snapchat\.com/i, color: "#FFFC00", extractors: ["Snapchat"] },
   { key: "threads", name: "Threads", match: /threads\.(net|com)/i, color: "#E7E9EA", extractors: ["Threads"] },
   { key: "bluesky", name: "Bluesky", match: /bsky\.app/i, color: "#4C9EFF", extractors: ["Bluesky"] },
+  { key: "suno", name: "Suno", match: /suno\.com/i, color: "#9A66FF", extractors: ["Suno"] },
 ];
 
 /** Detect the platform from a (possibly partially typed) URL, or null if unknown. */

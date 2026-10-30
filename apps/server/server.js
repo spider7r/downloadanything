@@ -211,6 +211,314 @@ function cleanErr(msg) {
     .slice(0, 300);
 }
 
+/* ------------------------------------------------------------------ */
+/* Channel extras (avatar / followers / following) — best-effort,      */
+/* using only publicly, legally available data. Never breaks /api/info.*/
+/* ------------------------------------------------------------------ */
+
+const UA_PAGE =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
+
+function safeNav(url, opts = {}) {
+  return fetch(url, { signal: AbortSignal.timeout(6500), ...opts });
+}
+
+/** Collapse the multi-layer escaping Suno/Next.js use so regexes are readable. */
+function unescapeAll(s) {
+  let prev;
+  for (let i = 0; i < 5; i++) {
+    prev = s;
+    s = s.replace(/\\(.)/g, "$1");
+    if (s === prev) break;
+  }
+  return s;
+}
+
+/* --------------------------- Suno support ------------------------------ */
+/* Suno song pages embed the full public song object (title, cover art,    */
+/* play/like counts, creator, avatar, duration) plus direct player URLs.   */
+
+function sunoSongFromText(flat, idx) {
+  const before = flat.slice(Math.max(0, idx - 1400), idx);
+  const after = flat.slice(idx, idx + 3000);
+
+  const last = (re, hay) => {
+    const g = new RegExp(re.source, `${re.flags}g`);
+    let out = null;
+    for (const mm of hay.matchAll(g)) out = mm[1];
+    return out ?? null;
+  };
+  const first = (re, hay) => (hay.match(re) || [])[1] ?? null;
+
+  const audioMedia = first(/"media_urls":\[\{"url":"([^"]+)"/, after);
+  let audioUrl = first(/"audio_url":"([^"]+)"/, after);
+  if (audioUrl && audioUrl.includes("/api/forbidden")) audioUrl = null;
+  const title = last(/"title":"([^"]{1,300})"/, before);
+  const id = last(/"id":"([0-9a-f-]{36})"/, before);
+  if (!id && !title) return null;
+  return {
+    id: id || (title && title.toLowerCase().replace(/\s+/g, "-")) || null,
+    title: title || "Suno song",
+    playCount: Number(last(/"play_count":(\d+)/, before) || 0),
+    likeCount: Number(last(/"upvote_count":(\d+)/, before) || 0),
+    audioUrl: audioMedia || audioUrl,
+    videoUrl: first(/"video_url":"([^"]+\.mp4)"/, after),
+    image: first(/"image_large_url":"([^"]+)"/, after) || first(/"image_url":"([^"]+)"/, after),
+    duration: Number(first(/"duration":([0-9.]+)/, after) || 0),
+    model: first(/"major_model_version":"([^"]+)"/, after) || null,
+    tags: first(/"tags":"([^"]{0,300})"/, after),
+    creator: first(/"display_name":"([^"]{1,120})"/, after) || null,
+    handle: first(/"handle":"([^"]{1,120})"/, after) || null,
+    avatar: first(/"avatar_image_url":"([^"]+)"/, after),
+    createdAt: first(/"created_at":"([^"]+)"/, after),
+    public: last(/"is_public":(true|false)/, before) !== "false",
+  };
+}
+
+async function sunoSongs(url) {
+  const res = await safeNav(url, {
+    headers: { "User-Agent": UA_PAGE, Accept: "text/html", "Accept-Language": "en-US,en;q=0.9" },
+    redirect: "follow",
+  });
+  if (!res.ok) throw new Error(`Suno returned HTTP ${res.status}`);
+  const flat = unescapeAll(await res.text());
+  const songs = [];
+  const re = /"entity_type":"song_schema"/g;
+  let m;
+  while ((m = re.exec(flat)) && songs.length < 6) {
+    const s = sunoSongFromText(flat, m.index);
+    if (s && s.title && (s.audioUrl || s.videoUrl)) songs.push(s);
+  }
+  if (!songs.length) {
+    throw new Error(
+      "No public song found on this Suno link — the song may be Private/Link-Only or not shared yet.",
+    );
+  }
+  return songs;
+}
+
+function sunoInfoResponse(songs, reqUrl) {
+  const s = songs[0];
+  const d = s.createdAt ? s.createdAt.slice(0, 10) : null; // 2024-12-17
+  const uploadDate = d ? `${d.slice(0, 4)}${d.slice(5, 7)}${d.slice(8, 10)}` : null;
+  const tags = s.tags ? s.tags.split(/,\s*/).slice(0, 8).join(", ") : null;
+  const isPlaylist = /suno\.com\/playlist\//i.test(reqUrl);
+  const description = [
+    tags ? `Tags: ${tags}` : null,
+    s.model ? `Generated with Suno ${s.model}` : null,
+    isPlaylist
+      ? `This playlist contains ${songs.length} public song${songs.length === 1 ? "" : "s"} — showing the first. Paste an individual song link (suno.com/song/…) to pick another one.`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const formats = [
+    ...(s.videoUrl
+      ? [
+          {
+            format_id: "suno-mp4",
+            ext: "mp4",
+            height: 1080,
+            fps: null,
+            vcodec: "h264",
+            acodec: "mp4a.40.2",
+            filesize: null,
+            filesize_approx: null,
+            tbr: null,
+            abr: null,
+            format_note: "video + audio",
+          },
+          {
+            format_id: "suno-audio",
+            ext: "m4a",
+            height: null,
+            fps: null,
+            vcodec: null,
+            acodec: "aac",
+            filesize: null,
+            filesize_approx: null,
+            tbr: null,
+            abr: null,
+            format_note: "audio only (extracted)",
+          },
+        ]
+      : s.audioUrl
+        ? [
+            {
+              format_id: "suno-audio",
+              ext: "m4a",
+              height: null,
+              fps: null,
+              vcodec: null,
+              acodec: "mp4a.40.2",
+              filesize: null,
+              filesize_approx: null,
+              tbr: null,
+              abr: null,
+              format_note: "original quality",
+            },
+          ]
+        : []),
+  ];
+  return {
+    title: s.title,
+    uploader: s.creator || s.handle,
+    channel: s.creator || s.handle,
+    channel_subs: null,
+    channel_avatar: s.avatar || null,
+    channel_followers: null,
+    channel_following: null,
+    channel_verified: null,
+    description,
+    view_count: s.playCount || null,
+    like_count: s.likeCount || null,
+    upload_date: uploadDate,
+    duration: s.duration || null,
+    thumbnail: s.image || null,
+    webpage_url: s.id ? `https://suno.com/song/${s.id}` : reqUrl,
+    extractor: "Suno",
+    formats,
+  };
+}
+
+/* ---------------------- platform avatar enrichment ---------------------- */
+
+async function unavatar(provider, username) {
+  if (!username) return null;
+  const u = `https://unavatar.io/${provider}/${encodeURIComponent(username)}?fallback=false`;
+  try {
+    const res = await safeNav(u, { method: "HEAD" });
+    return res.ok ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+async function enrichChannel(pageUrl, info) {
+  const extra = { avatar: null, followers: null, following: null, verified: null };
+  try {
+    const u = new URL(pageUrl);
+    const host = u.hostname.replace(/^www\./, "");
+
+    // 1) Fields some extractors provide directly
+    if (info.uploader_thumbnail) extra.avatar = info.uploader_thumbnail;
+    if (info.channel_thumbnail && !extra.avatar) extra.avatar = info.channel_thumbnail;
+    if (info.user_thumbnail && !extra.avatar) extra.avatar = info.user_thumbnail;
+
+    if (/youtube\./.test(host)) {
+      // channel avatar lives in the watch page's owner renderer
+      if (info.webpage_url) {
+        const page = await safeNav(info.webpage_url, {
+          headers: { "User-Agent": UA_PAGE, "Accept-Language": "en-US,en;q=0.9" },
+        });
+        if (page.ok) {
+          const html = unescapeAll(await page.text());
+          const m =
+            html.match(
+              /"videoOwnerRenderer":\s*\{\s*"thumbnail":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
+            ) ||
+            html.match(
+              /"avatar":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
+            );
+          if (m) extra.avatar = m[1].replace(/=s\d+/, "=s400");
+        }
+      }
+    } else if (/instagram\./.test(host)) {
+      const igUser = (info.uploader || info.channel || "").replace(/^@/, "");
+      if (igUser) {
+        let getUser = null;
+        try {
+          const res = await safeNav(
+            `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(igUser)}`,
+            {
+              headers: {
+                "User-Agent":
+                  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                "X-IG-App-ID": "936619743392459",
+                "Accept-Language": "en-US,en;q=0.9",
+              },
+            },
+          );
+          if (res.ok) {
+            const j = await res.json();
+            getUser = j?.data?.user || null;
+          }
+        } catch {
+          /* fall through to unavatar */
+        }
+        if (getUser) {
+          extra.avatar = getUser.profile_pic_url || getUser.profile_pic_url_hd || null;
+          extra.followers = getUser.edge_followed_by?.count ?? null;
+          extra.following = getUser.edge_follow?.count ?? null;
+          extra.verified = getUser.is_verified ?? null;
+        } else {
+          extra.avatar = await unavatar("instagram", igUser);
+        }
+      }
+    } else if (/tiktok\./.test(host)) {
+      const handle = (info.uploader || u.pathname.match(/@([\w.]+)/)?.[1] || "").replace(/^@/, "");
+      if (handle) {
+        try {
+          const page = await safeNav(`https://www.tiktok.com/@${handle}`, {
+            headers: { "User-Agent": UA_PAGE, "Accept-Language": "en-US,en;q=0.9" },
+          });
+          if (page.ok) {
+            const flat = unescapeAll(await page.text());
+            extra.avatar ??= flat.match(/"avatarLarger":"([^"]+)"/)?.[1] || null;
+            extra.followers ??= Number(flat.match(/"followerCount":(\d+)/)?.[1]) || null;
+            extra.following ??= Number(flat.match(/"followingCount":(\d+)/)?.[1]) || null;
+          }
+        } catch {
+          /* best effort */
+        }
+        if (!extra.avatar) extra.avatar = await unavatar("tiktok", handle);
+      }
+    } else if (/bsky\.app/.test(host)) {
+      const handle = u.pathname.match(/\/profile\/([^/]+)/)?.[1];
+      if (handle) {
+        try {
+          const didRes = await safeNav(
+            `https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(handle)}`,
+          );
+          if (didRes.ok) {
+            const did = (await didRes.json()).did;
+            const prof = await safeNav(
+              `https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(did)}`,
+            );
+            if (prof.ok) {
+              const p = await prof.json();
+              extra.avatar = p.avatar || null;
+              extra.followers = p.followers_count ?? null;
+              extra.following = p.follows_count ?? null;
+            } else {
+              extra.avatar = await unavatar("bsky", handle);
+            }
+          }
+        } catch {
+          /* best effort */
+        }
+      }
+    } else if (/facebook\.com/.test(host)) {
+      const fbUser =
+        (info.uploader || "").replace(/^@/, "") ||
+        u.pathname.match(/profile\.php\?id=(\d+)/)?.[1] ||
+        null;
+      extra.avatar = await unavatar("facebook", fbUser);
+    } else if (/(^|\.)(x|twitter)\.com/.test(host)) {
+      extra.avatar = await unavatar("twitter", (info.uploader || "").replace(/^@/, ""));
+    } else if (/reddit\.com/.test(host)) {
+      const rd =
+        (info.uploader || "").replace(/^u\//, "") ||
+        (u.pathname.match(/\/user\/([\w-]+)/) || [])[1] ||
+        null;
+      extra.avatar = await unavatar("reddit", rd);
+    }
+  } catch {
+    /* enrichment is strictly best-effort */
+  }
+  return extra;
+}
+
 /* ---------------------------- health ----------------------------- */
 
 app.get("/api/health", async (_req, res) => {
@@ -230,7 +538,19 @@ app.post("/api/info", async (req, res) => {
   } catch (err) {
     return res.status(err.status || 400).json({ error: err.message });
   }
-  const args = ["-J", "--no-playlist", "--no-warnings", "--no-check-certificates", req.body.url.trim()];
+  const url = req.body.url.trim();
+
+  // Suno song/playlist pages embed everything publicly — no yt-dlp needed.
+  if (/^https?:\/\/(?:www\.)?suno\.com/i.test(url)) {
+    try {
+      const songs = await sunoSongs(url);
+      return res.json(sunoInfoResponse(songs, url));
+    } catch (err) {
+      return res.status(422).json({ error: err.message || "Could not analyze this Suno link" });
+    }
+  }
+
+  const args = ["-J", "--no-playlist", "--no-warnings", "--no-check-certificates", url];
   try {
     const out = await runYtDlp(args, 120_000);
     const start = out.indexOf("{");
@@ -255,47 +575,18 @@ app.post("/api/info", async (req, res) => {
         format_note: f.format_note || null,
       }))
       .filter((f) => f.ext !== "mhtml");
-    // Channel avatar: use it directly when the extractor provides it; otherwise
-    // for YouTube scrape the channel avatar out of the watch page (ytInitialData).
-    let channelAvatar = null;
-    try {
-      channelAvatar =
-        info.uploader_thumbnail || info.channel_thumbnail || info.user_thumbnail ||
-        info?.artist?.picture_large || null;
-      if (!channelAvatar && info.webpage_url && /youtube/i.test(info.webpage_url)) {
-        const page = await fetch(info.webpage_url, {
-          signal: AbortSignal.timeout(7000),
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-          },
-        });
-        if (page.ok) {
-          // YouTube minifies/escapes JSON inside the page; normalize so regexes are sane
-          const html = (await page.text()).replace(/\\u0026/g, "&").replace(/\\\//g, "/");
-          const m =
-            html.match(
-              /"videoOwnerRenderer":\s*\{\s*"thumbnail":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
-            ) ||
-            html.match(
-              /"avatar":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
-            );
-          if (m) {
-            // URLs ship at tiny densities (=s48..); ask for a sharper one
-            channelAvatar = m[1].replace(/=s\d+/, "=s400");
-          }
-        }
-      }
-    } catch {
-      /* avatar is best-effort only — never break /api/info */
-    }
+    // Channel avatar & follower stats: as much publicly available info as possible.
+    const extra = await enrichChannel(url, info);
 
     res.json({
       title: info.title || info.id || "Untitled",
       uploader: info.uploader || info.uploader_id || info.channel || null,
       channel: info.channel || info.uploader || null,
-      channel_subs: info.channel_follower_count ?? info.subscriber_count ?? null,
-      channel_avatar: channelAvatar,
+      channel_subs: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
+      channel_avatar: extra.avatar,
+      channel_followers: extra.followers,
+      channel_following: extra.following,
+      channel_verified: extra.verified,
       description:
         typeof info.description === "string" ? info.description.slice(0, 900) : null,
       view_count: info.view_count ?? null,
@@ -361,6 +652,116 @@ function makeDownloadArgs(url, format, wantMp3) {
   ];
 }
 
+/* Suno hosts public files on its own CDN; grab them directly instead of yt-dlp. */
+function safeName(name) {
+  return (
+    (name || "suno-song")
+      .replace(/[<>:"/\\|?*\x00-\x1f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80) || "suno-song"
+  );
+}
+
+function fmtBytes(n) {
+  const mb = n / 1024 / 1024;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB/s` : `${mb.toFixed(1)} MB/s`;
+}
+
+async function directDownload(job, mediaUrl, title, mode, wantMp3) {
+  const controller = new AbortController();
+  job.abort = controller;
+  let child = null;
+  try {
+    if (job.status === "error") return; // cancelled before we began
+    job.status = "downloading";
+    const res = await fetch(mediaUrl, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: { "User-Agent": UA_PAGE },
+    });
+    if (!res.ok || !res.body) throw new Error(`CDN returned HTTP ${res.status}`);
+    const total = Number(res.headers.get("content-length") || 0);
+    let out = path.join(job.workDir, `${safeName(title)}.mp4`);
+    const fd = await fsp.open(out, "w");
+    let got = 0;
+    let lastPct = 0;
+    let lastTick = Date.now();
+    let lastBytes = 0;
+    try {
+      for await (const chunk of res.body) {
+        await fd.write(chunk);
+        got += chunk.length;
+        const now = Date.now();
+        if (now - lastTick > 400) {
+          const bps = ((got - lastBytes) * 1000) / (now - lastTick);
+          job.speed = fmtBytes(bps);
+          job.eta = total ? `${Math.max(1, Math.round((total - got) / Math.max(1, bps)))}s` : "";
+          if (total) {
+            job.percent = Math.min(100, (got / total) * 100);
+          } else {
+            lastPct = lastPct + (got - lastBytes) / 20000 + 1;
+            job.percent = Math.min(95, lastPct);
+          }
+          lastTick = now;
+          lastBytes = got;
+        }
+      }
+    } finally {
+      await fd.close();
+    }
+    if (total) job.percent = 100;
+    else job.percent = 99;
+
+    // mode: "mp4" = deliver as-is | "m4a" = strip video (stream copy) | "mp3" = 320k MP3
+    const convert = (args, finalName, errLabel) => {
+      if (!FFMPEG_PATH) throw new Error(`${errLabel} needs FFmpeg, which is unavailable on the server`);
+      const finalPath = path.join(job.workDir, finalName);
+      job.status = "converting";
+      job.percent = 99;
+      child = spawn(FFMPEG_PATH, args, { stdio: ["ignore", "ignore", "pipe"] });
+      job.child = child;
+      return new Promise((resolve, reject) => {
+        let fErr = "";
+        child.stderr.on("data", (d) => {
+          fErr = (fErr + d.toString()).slice(-1200);
+        });
+        child.on("error", reject);
+        child.on("close", (code) =>
+          code === 0 ? resolve() : reject(new Error(`ffmpeg: ${cleanErr(fErr) || `exited with code ${code}`}`)),
+        );
+      });
+    };
+
+    if (mode === "mp4") {
+      job.filename = path.basename(out);
+    } else if (mode === "m4a") {
+      await convert(
+        ["-y", "-i", out, "-vn", "-acodec", "copy", path.join(job.workDir, `${safeName(title)}.m4a`)],
+        `${safeName(title)}.m4a`,
+        "Audio extraction",
+      );
+      job.filename = `${safeName(title)}.m4a`;
+      fsp.rm(out, { force: true }).catch(() => {});
+    } else {
+      const mp3Name = `${safeName(title)}.mp3`;
+      await convert(["-y", "-i", out, "-vn", "-b:a", "320k", path.join(job.workDir, mp3Name)], mp3Name, "MP3 conversion");
+      job.filename = mp3Name;
+      fsp.rm(out, { force: true }).catch(() => {});
+    }
+    job.title = job.filename;
+    job.percent = 100;
+    job.status = "done";
+    console.log(`[job ${job.id}] suno done -> ${job.filename}`);
+  } catch (err) {
+    if (job.status === "error") return; // cancelled
+    job.status = "error";
+    job.error = err?.message || "Suno download failed";
+    if (job.workDir) fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+    job.workDir = null;
+  }
+}
+
 app.post("/api/download", async (req, res) => {
   try {
     assertValidUrl(req.body?.url);
@@ -401,7 +802,31 @@ app.post("/api/download", async (req, res) => {
   };
   JOBS.set(id, job);
 
-  const child = spawn(YTDLP_PATH, makeDownloadArgs(req.body.url.trim(), format, wantMp3), {
+  const targetUrl = req.body.url.trim();
+
+  // --- Suno: public files live on Suno's own CDN; grab the CDN MP4 and convert as needed ---
+  if (/^https?:\/\/(?:www\.)?suno\.com/i.test(targetUrl)) {
+    try {
+      const songs = await sunoSongs(targetUrl);
+      const s = songs.find((x) => targetUrl.includes(x.id)) || songs[0];
+      const mediaUrl = s.videoUrl || s.audioUrl;
+      if (!mediaUrl) {
+        return res.status(422).json({ error: "This Suno song has no downloadable media URL available" });
+      }
+      let mode;
+      if (format.includes("suno-mp4")) mode = "mp4";
+      else if (wantMp3) mode = "mp3";
+      else mode = "m4a";
+      void directDownload(job, mediaUrl, s.title, mode, wantMp3);
+      return res.json({ id });
+    } catch (err) {
+      JOBS.delete(id);
+      if (job.workDir) fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
+      return res.status(422).json({ error: err.message || "Could not start this Suno download" });
+    }
+  }
+
+  const child = spawn(YTDLP_PATH, makeDownloadArgs(targetUrl, format, wantMp3), {
     cwd: workDir,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -488,6 +913,13 @@ app.delete("/api/download/:id", async (req, res) => {
   }
   job.status = "error";
   job.error = "Cancelled";
+  if (job.abort) {
+    try {
+      job.abort.abort();
+    } catch {
+      /* ignore */
+    }
+  }
   if (job.child && !job.child.killed) job.child.kill("SIGKILL");
   if (job.workDir) fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
   job.workDir = null;

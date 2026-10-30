@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
+  BadgeCheck,
   CalendarDays,
+  ExternalLink,
   Download,
   Eye,
   Film,
@@ -199,6 +201,44 @@ function JobRow({ job, onCancel }: { job: ActiveJob; onCancel: (id: string) => v
 }
 
 /* --------------------------- detected platform chip --------------------------- */
+
+const SUB_LABELS: Record<string, string> = {
+  youtube: "subscribers",
+  reddit: "members",
+  facebook: "followers",
+  instagram: "followers",
+  tiktok: "followers",
+  threads: "followers",
+  snapchat: "friends",
+  bluesky: "followers",
+  suno: "fans",
+};
+
+/** Channel avatar with graceful fallback to a gradient initial if the image fails. */
+function ChannelAvatar({ src, name }: { src?: string | null; name: string }) {
+  const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    setBroken(false);
+  }, [src]);
+
+  const initial = name.trim().charAt(0) || "?";
+  if (!src || broken) {
+    return (
+      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-sm font-black text-white uppercase shadow">
+        {initial}
+      </span>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      onError={() => setBroken(true)}
+      className="h-10 w-10 shrink-0 rounded-full object-cover ring-2 ring-white/10 shadow"
+      referrerPolicy="no-referrer"
+    />
+  );
+}
 
 function DetectedChip({ platform }: { platform: Platform }) {
   return (
@@ -437,123 +477,162 @@ export default function Downloader() {
 
       {phase === "ready" && info && (
         <div className="mt-6 overflow-hidden rounded-3xl border border-zinc-800 bg-zinc-900/70 shadow-2xl">
-          {/* --- rich media header --- */}
-          <div className="grid gap-5 p-5 sm:grid-cols-[300px,1fr]">
-            <div className="group relative overflow-hidden rounded-xl bg-zinc-800 shadow-lg ring-1 ring-white/5">
-              {info.thumbnail ? (
-                <img
-                  src={info.thumbnail}
-                  alt=""
-                  className="aspect-video w-full object-cover transition duration-500 group-hover:scale-105"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="flex aspect-video w-full items-center justify-center">
-                  <Film className="h-10 w-10 text-zinc-600" />
-                </div>
-              )}
-              {/* hover play overlay */}
-              <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition duration-300 group-hover:bg-black/30">
-                <span className="grid h-14 w-14 place-items-center rounded-full bg-black/60 opacity-0 ring-1 ring-white/20 backdrop-blur transition duration-300 group-hover:opacity-100">
-                  <Play className="h-6 w-6 translate-x-0.5 fill-white text-white" />
-                </span>
+          {/* --- big thumbnail at top --- */}
+          <div className="group relative overflow-hidden bg-zinc-950">
+            {info.thumbnail ? (
+              <img
+                src={info.thumbnail}
+                alt=""
+                className="aspect-video max-h-[460px] w-full object-cover transition duration-500 group-hover:scale-[1.02]"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="flex aspect-video max-h-[360px] w-full items-center justify-center">
+                <Film className="h-16 w-16 text-zinc-600" />
               </div>
-              {info.duration != null && info.duration > 0 && (
-                <span className="absolute right-2.5 bottom-2.5 rounded-md bg-black/85 px-2 py-0.5 text-xs font-bold text-white">
-                  {fmtDuration(info.duration)}
-                </span>
-              )}
+            )}
+            {/* hover play overlay */}
+            <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition duration-300 group-hover:bg-black/30">
+              <span className="grid h-16 w-16 place-items-center rounded-full bg-black/60 opacity-0 ring-1 ring-white/20 backdrop-blur transition duration-300 group-hover:opacity-100">
+                <Play className="h-7 w-7 translate-x-0.5 fill-white text-white" />
+              </span>
+            </div>
+            {info.duration != null && info.duration > 0 && (
+              <span className="absolute right-3.5 bottom-3.5 rounded-lg bg-black/85 px-2.5 py-1 text-xs font-bold text-white shadow-md">
+                {fmtDuration(info.duration)}
+              </span>
+            )}
+          </div>
+
+          {/* --- media info below thumbnail --- */}
+          <div className="p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <h3 className="text-xl font-extrabold leading-snug tracking-tight text-white lg:text-2xl">
+                {info.title}
+              </h3>
+              <button
+                onClick={reset}
+                title="Clear"
+                className="h-9 w-9 shrink-0 rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+              >
+                <Trash2 className="mx-auto h-4 w-4" />
+              </button>
             </div>
 
-            <div className="min-w-0">
-              <div className="flex items-start justify-between gap-3">
-                <h3 className="text-xl font-extrabold leading-snug tracking-tight text-white line-clamp-2 lg:text-2xl">
-                  {info.title}
-                </h3>
-                <button
-                  onClick={reset}
-                  title="Clear"
-                  className="h-9 w-9 shrink-0 rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+            {/* channel row with avatar & clickable creator profile */}
+            <div className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2">
+              {info.channel_url ? (
+                <a
+                  href={info.channel_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Open ${channelName}'s profile`}
+                  className="shrink-0 transition-transform hover:scale-105"
                 >
-                  <Trash2 className="mx-auto h-4 w-4" />
-                </button>
-              </div>
+                  <ChannelAvatar src={info.channel_avatar} name={channelName} />
+                </a>
+              ) : (
+                <ChannelAvatar src={info.channel_avatar} name={channelName} />
+              )}
 
-              {/* channel row with avatar */}
-              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-                {info.channel_avatar ? (
-                  <img
-                    src={info.channel_avatar}
-                    alt=""
-                    className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-white/10"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-sm font-black text-white uppercase">
-                    {channelName.trim().charAt(0) || "?"}
-                  </span>
-                )}
-                <span className="text-sm font-bold text-zinc-100">{channelName}</span>
-                {info.channel_subs != null && info.channel_subs > 0 && (
-                  <span className="rounded-md bg-zinc-800/80 px-2 py-0.5 text-xs font-semibold text-zinc-400">
-                    {formatCount(info.channel_subs)} subscribers
-                  </span>
-                )}
-                {platformInfo && (
-                  <span
-                    className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold"
-                    style={{ backgroundColor: `${platformInfo.color}26`, color: platformInfo.color }}
-                  >
-                    <PlatformIcon platformKey={platformInfo.key} className="h-3 w-3" />
-                    {platformInfo.name}
-                  </span>
-                )}
-              </div>
+              {info.channel_url ? (
+                <a
+                  href={info.channel_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Open ${channelName}'s profile`}
+                  className="group/channel inline-flex items-center gap-1.5 text-base font-bold text-zinc-100 hover:text-indigo-400 transition"
+                >
+                  <span className="group-hover/channel:underline underline-offset-4">{channelName}</span>
+                  {info.channel_verified && <BadgeCheck className="h-4.5 w-4.5 text-sky-400 shrink-0" />}
+                  <ExternalLink className="h-3.5 w-3.5 text-zinc-500 group-hover/channel:text-indigo-400 transition shrink-0" />
+                </a>
+              ) : (
+                <span className="flex items-center gap-1.5 text-base font-bold text-zinc-100">
+                  {channelName}
+                  {info.channel_verified && <BadgeCheck className="h-4.5 w-4.5 text-sky-400 shrink-0" />}
+                </span>
+              )}
 
-              {/* stats chips with brand-tinted icons */}
-              <div className="mt-3.5 flex flex-wrap gap-2">
-                <StatChip icon={Eye} tone="#818cf8" text={info.view_count ? `${formatCount(info.view_count)} views` : ""} />
-                <StatChip icon={ThumbsUp} tone="#e879f9" text={info.like_count ? `${formatCount(info.like_count)} likes` : ""} />
-                <StatChip icon={CalendarDays} tone="#a5b4fc" text={formatDate(info.upload_date)} />
-                <StatChip
-                  icon={Film}
-                  tone="#f0abfc"
-                  text={`${groups.muxed.length + groups.videoOnly.length} video · ${groups.audio.length} audio`}
-                />
-              </div>
+              {/* Followers / Subscribers count */}
+              {(() => {
+                const followCount = (info.channel_followers ?? info.channel_subs) ?? 0;
+                if (followCount <= 0) return null;
+                const label = SUB_LABELS[platformInfo?.key ?? ""] ?? "subscribers";
+                return (
+                  <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300">
+                    {formatCount(followCount)} {label}
+                  </span>
+                );
+              })()}
 
-              {info.description && <DescriptionBox html={info.description} />}
+              {/* Following count or Following: Private */}
+              {info.channel_following != null && (
+                typeof info.channel_following === "number" && info.channel_following > 0 ? (
+                  <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-300">
+                    {formatCount(info.channel_following)} following
+                  </span>
+                ) : String(info.channel_following).toLowerCase() === "private" ? (
+                  <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-medium text-zinc-400 italic">
+                    Following: Private
+                  </span>
+                ) : null
+              )}
+
+              {platformInfo && (
+                <span
+                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold"
+                  style={{ backgroundColor: `${platformInfo.color}26`, color: platformInfo.color }}
+                >
+                  <PlatformIcon platformKey={platformInfo.key} className="h-3 w-3" />
+                  {platformInfo.name}
+                </span>
+              )}
             </div>
+
+            {/* stats chips with brand-tinted icons */}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <StatChip icon={Eye} tone="#818cf8" text={info.view_count ? `${formatCount(info.view_count)} views` : ""} />
+              <StatChip icon={ThumbsUp} tone="#e879f9" text={info.like_count ? `${formatCount(info.like_count)} likes` : ""} />
+              <StatChip icon={CalendarDays} tone="#a5b4fc" text={formatDate(info.upload_date)} />
+              <StatChip
+                icon={Film}
+                tone="#f0abfc"
+                text={`${groups.muxed.length + groups.videoOnly.length} video · ${groups.audio.length} audio`}
+              />
+            </div>
+
+            {info.description && <DescriptionBox html={info.description} />}
           </div>
 
           {/* --- main tabs --- */}
-          <div className="flex items-center justify-between border-t border-zinc-800 px-5 pt-3">
-            <div className="flex gap-2">
+          <div className="flex items-center justify-between border-t border-zinc-800 px-5 py-3 bg-zinc-950/40">
+            <div className="inline-flex rounded-xl bg-zinc-900/90 p-1 ring-1 ring-white/10 gap-1">
               <button
                 onClick={() => setTab("video")}
-                className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-bold ${
+                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold transition-all ${
                   tab === "video"
-                    ? "border-b-2 border-indigo-400 text-white"
-                    : "text-zinc-500 hover:text-zinc-300"
+                    ? "bg-gradient-to-r from-indigo-600 to-indigo-500 text-white shadow-md shadow-indigo-600/30"
+                    : "text-zinc-400 hover:text-zinc-200"
                 }`}
               >
-                <Film className="h-4 w-4" /> Video
+                <Film className="h-3.5 w-3.5" /> Video ({groups.muxed.length + groups.videoOnly.length})
               </button>
               <button
                 onClick={() => setTab("audio")}
-                className={`flex items-center gap-2 rounded-t-lg px-4 py-2.5 text-sm font-bold ${
+                className={`flex items-center gap-2 rounded-lg px-4 py-2 text-xs font-bold transition-all ${
                   tab === "audio"
-                    ? "border-b-2 border-fuchsia-400 text-white"
-                    : "text-zinc-500 hover:text-zinc-300"
+                    ? "bg-gradient-to-r from-fuchsia-600 to-pink-600 text-white shadow-md shadow-fuchsia-600/30"
+                    : "text-zinc-400 hover:text-zinc-200"
                 }`}
               >
-                <Music className="h-4 w-4" /> Audio
+                <Music className="h-3.5 w-3.5" /> Audio ({groups.audio.length + (showMp3Card ? 1 : 0)})
               </button>
             </div>
           </div>
 
           {/* --- extension filter tabs --- */}
-          <div className="flex flex-wrap gap-2 border-t border-zinc-800 bg-zinc-950/40 px-5 py-3">
+          <div className="flex flex-wrap gap-2 border-t border-zinc-800/60 bg-zinc-950/30 px-5 py-3">
             {extTabs.map((ext) => {
               const active = extFilter === ext;
               const accent = tab === "video" ? "#6366f1" : "#d946ef";
@@ -562,18 +641,20 @@ export default function Downloader() {
                   key={ext}
                   onClick={() => setExtFilter(ext)}
                   style={active ? { backgroundColor: accent, borderColor: accent } : undefined}
-                  className={`rounded-lg border px-3 py-1 text-xs font-extrabold tracking-widest uppercase transition ${
-                    active ? "text-white shadow-lg" : "border-zinc-800 bg-zinc-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
+                  className={`rounded-xl border px-3.5 py-1 text-xs font-extrabold tracking-wider uppercase transition-all ${
+                    active
+                      ? "text-white shadow-lg shadow-indigo-500/20"
+                      : "border-zinc-800 bg-zinc-900/80 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
                   }`}
                 >
-                  {ext === "all" ? "All" : ext}
+                  {ext === "all" ? "All Formats" : ext}
                 </button>
               );
             })}
           </div>
 
           {/* --- formats --- */}
-          <div className="divide-y divide-zinc-800/60 border-t border-zinc-800">
+          <div className="border-t border-zinc-800 bg-zinc-950/20">
             {tab === "video" && (
               <>
                 {fMuxed.length > 0 && (
@@ -587,7 +668,7 @@ export default function Downloader() {
                   />
                 )}
                 {fMuxed.length === 0 && fVideoOnly.length === 0 && extFilter === "all" && (
-                  <p className="px-5 py-3 text-sm text-zinc-500">
+                  <p className="px-5 py-4 text-sm text-zinc-500">
                     No video formats available for this link — try the Audio tab.
                   </p>
                 )}
@@ -599,7 +680,7 @@ export default function Downloader() {
                 )}
                 {fVideoOnly.length > 0 && (
                   <FormatSection
-                    heading="Higher qualities (merged automatically)"
+                    heading="Available qualities (video + audio merged)"
                     items={fVideoOnly}
                     labelOf={(f) => (f.height ? `${f.height}p${f.fps && f.fps > 30 ? f.fps : ""}` : f.format_id)}
                     subOf={(f) => [codecName(f.vcodec), parseMbps(f.tbr)].filter(Boolean).join(" · ")}
@@ -618,18 +699,31 @@ export default function Downloader() {
                       e.preventDefault();
                       void beginJob({ url: url.trim(), format: "ba/b", mp3: true }, "MP3 · best quality");
                     }}
-                    className="flex w-full items-center gap-4 bg-gradient-to-r from-fuchsia-950/40 to-indigo-950/40 px-5 py-3 text-left transition hover:brightness-125"
+                    className="group flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-fuchsia-950/30 via-zinc-900/40 to-indigo-950/30 p-4 transition-all hover:bg-fuchsia-950/50 border-b border-zinc-800/60 w-full text-left"
                   >
-                    <span className="flex h-9 w-16 items-center justify-center rounded-lg bg-fuchsia-600/90 text-sm font-bold text-white">
-                      mp3
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-base font-bold text-white">
-                        MP3 — best quality
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <span className="flex h-11 w-16 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-fuchsia-600 to-pink-600 text-xs font-black tracking-wider uppercase text-white shadow-lg shadow-fuchsia-600/30">
+                        MP3
                       </span>
-                      <span className="block text-xs text-zinc-400">converted with FFmpeg · 320 kbps</span>
+                      <div className="min-w-0 text-left">
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-extrabold text-white">
+                            MP3 Audio — Best Quality
+                          </span>
+                          <span className="rounded-md bg-fuchsia-500/20 px-2 py-0.5 text-[10px] font-black tracking-wider text-fuchsia-300 ring-1 ring-fuchsia-500/30">
+                            320 KBPS
+                          </span>
+                        </div>
+                        <span className="block text-xs text-zinc-400 mt-0.5">
+                          Universal audio format converted server-side with FFmpeg
+                        </span>
+                      </div>
+                    </div>
+
+                    <span className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-fuchsia-600 to-indigo-600 px-5 py-2.5 text-xs font-bold text-white shadow-lg shadow-fuchsia-600/30 transition-all duration-200 group-hover:from-fuchsia-500 group-hover:to-indigo-500 group-hover:scale-[1.03] active:scale-95 shrink-0">
+                      <Download className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:-translate-y-0.5" />
+                      <span>Download MP3</span>
                     </span>
-                    <Download className="h-5 w-5 shrink-0 text-fuchsia-400" />
                   </button>
                 )}
                 {fAudio.length > 0 && (
@@ -684,59 +778,82 @@ function FormatSection({
   onClick: (e: React.MouseEvent, opts: { url: string; format?: string }, label: string) => void;
 }) {
   return (
-    <div>
-      <p className="bg-zinc-900/95 px-5 py-2 text-[11px] font-bold tracking-widest text-zinc-500 uppercase">
-        {heading}
-      </p>
-      {items.map((f) => {
-        const label = labelOf(f);
-        const sub = subOf?.(f) || "";
-        const fpsExtra = f.fps && f.fps > 30 ? ` · ${f.fps} fps` : "";
-        return (
-          <a
-            key={f.format_id}
-            href={`/api/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(f.format_id)}`}
-            onClick={(e) => onClick(e, { url, format: f.format_id }, label)}
-            className="group grid h-14 grid-cols-[auto,1fr,5.5rem,auto] items-center gap-4 bg-zinc-900/30 px-5 py-2 text-left transition hover:bg-zinc-800/70"
-          >
-            <span
-              className={`flex h-9 w-16 items-center justify-center rounded-lg text-sm font-extrabold tracking-wide uppercase ${
-                f.ext === "mp4"
-                  ? "bg-indigo-500/25 text-indigo-300"
-                  : f.ext === "webm"
-                    ? "bg-red-500/20 text-red-300"
-                    : f.ext === "mp3"
-                      ? "bg-fuchsia-500/25 text-fuchsia-300"
-                      : "bg-zinc-800 text-zinc-300"
-              }`}
+    <div className="overflow-hidden">
+      <div className="flex items-center justify-between bg-zinc-950/70 px-5 py-2.5 border-b border-zinc-800/40">
+        <span className="text-[11px] font-black tracking-widest text-zinc-400 uppercase">
+          {heading}
+        </span>
+        <span className="text-[11px] font-bold text-zinc-500">
+          {items.length} options
+        </span>
+      </div>
+      <div className="divide-y divide-zinc-800/40">
+        {items.map((f) => {
+          const label = labelOf(f);
+          const sub = subOf?.(f) || "";
+          const fpsExtra = f.fps && f.fps > 30 ? ` · ${f.fps}fps` : "";
+          const isHighRes = f.height && f.height >= 1080;
+          return (
+            <a
+              key={f.format_id}
+              href={`/api/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(f.format_id)}`}
+              onClick={(e) => onClick(e, { url, format: f.format_id }, label)}
+              className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 bg-zinc-900/20 px-5 py-3 text-left transition-all duration-200 hover:bg-zinc-800/60"
             >
-              {f.ext}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-base font-bold text-zinc-100">
-                {label}
-                {f.height && (f.height ?? 0) >= 1080 && (
-                  <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 align-[2px] text-[10px] font-extrabold tracking-wider text-emerald-400">
-                    HD
-                  </span>
-                )}
-              </span>
-              {sub && (
-                <span className="block truncate text-xs text-zinc-500">
-                  {sub}
-                  {fpsExtra}
+              <div className="flex items-center gap-3.5 min-w-0">
+                <span
+                  className={`flex h-10 w-16 shrink-0 items-center justify-center rounded-xl text-xs font-black tracking-wider uppercase shadow-inner ${
+                    f.ext === "mp4"
+                      ? "bg-indigo-500/20 text-indigo-300 ring-1 ring-indigo-500/30"
+                      : f.ext === "webm"
+                        ? "bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/30"
+                        : f.ext === "mp3"
+                          ? "bg-fuchsia-500/20 text-fuchsia-300 ring-1 ring-fuchsia-500/30"
+                          : "bg-zinc-800 text-zinc-300 ring-1 ring-white/5"
+                  }`}
+                >
+                  {f.ext}
                 </span>
-              )}
-            </span>
-            <span className="text-right text-sm tabular-nums text-zinc-500">
-              {fmtSize(f.filesize, f.filesize_approx) || "—"}
-            </span>
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-600 transition group-hover:bg-indigo-500 group-hover:text-white">
-              <Download className="h-4 w-4" />
-            </span>
-          </a>
-        );
-      })}
+
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-base font-extrabold text-zinc-100 tracking-tight group-hover:text-white transition">
+                      {label}
+                    </span>
+                    {isHighRes && (
+                      <span className="rounded-md bg-gradient-to-r from-emerald-500/20 to-teal-500/20 px-2 py-0.5 text-[10px] font-black tracking-wider text-emerald-400 ring-1 ring-emerald-500/30">
+                        {(f.height ?? 0) >= 2160 ? "4K ULTRA" : (f.height ?? 0) >= 1440 ? "2K QHD" : "1080p FHD"}
+                      </span>
+                    )}
+                    {f.fps && f.fps > 30 && (
+                      <span className="rounded-md bg-sky-500/20 px-1.5 py-0.5 text-[10px] font-bold text-sky-400">
+                        {f.fps}fps
+                      </span>
+                    )}
+                  </div>
+                  {sub && (
+                    <span className="block truncate text-xs text-zinc-400 mt-0.5">
+                      {sub}
+                      {fpsExtra}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 pt-2 sm:pt-0 border-t border-zinc-800/40 sm:border-t-0">
+                <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-400 tabular-nums">
+                  {fmtSize(f.filesize, f.filesize_approx) || "Direct stream"}
+                </span>
+
+                <span className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 px-4 py-2 text-xs font-bold text-white shadow-md shadow-indigo-600/20 transition-all duration-200 group-hover:from-indigo-500 group-hover:to-fuchsia-500 group-hover:shadow-indigo-500/40 group-hover:scale-[1.03] active:scale-95">
+                  <Download className="h-3.5 w-3.5 shrink-0 transition-transform duration-200 group-hover:-translate-y-0.5" />
+                  <span>Download</span>
+                </span>
+              </div>
+            </a>
+          );
+        })}
+      </div>
     </div>
   );
 }

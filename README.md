@@ -15,10 +15,12 @@ apps/
 
 ## Quick start (dev)
 
-```
-pnpm install
-pnpm dev:server   # API on http://localhost:8787
-pnpm dev:web      # site on http://localhost:5173 (proxies /api)
+```bash
+npm install
+npm run dev          # starts both server & web app concurrently
+# or run them individually:
+npm run dev:server   # API on http://localhost:8787
+npm run dev:web      # site on http://localhost:5173 (proxies /api)
 ```
 
 ## Deployment note

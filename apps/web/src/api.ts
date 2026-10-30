@@ -18,8 +18,13 @@ export type MediaInfo = {
   title: string;
   uploader?: string | null;
   channel?: string | null;
+  channel_url?: string | null;
   channel_subs?: number | null;
   channel_avatar?: string | null;
+  channel_followers?: number | null;
+  channel_following?: number | string | null;
+  channel_verified?: boolean | null;
+  channel_likes?: number | null;
   description?: string | null;
   view_count?: number | null;
   like_count?: number | null;
