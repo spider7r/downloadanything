@@ -208,7 +208,10 @@ function friendlyError(msg) {
   if (/ip address is blocked|blocked from accessing|rate.?limit/i.test(msg)) {
     return "This platform blocks requests from cloud/server IPs and only serves real connections. The upcoming Windows desktop app downloads from your own connection and bypasses this — try it there, or retry in a few minutes.";
   }
-  if (/login|sign in|log in|cookies|authenticate|empty media response|private video|not available in your country/i.test(msg)) {
+  if (/empty media response|not available/i.test(msg)) {
+    return "Instagram can't show this post without a logged-in account — it may be private, deleted, or restricted. Public posts download fine. The upcoming Windows desktop app will unlock these using your own logged-in session.";
+  }
+  if (/login|sign in|log in|cookies|authenticate|private video|not available in your country/i.test(msg)) {
     return "This content needs a logged-in session — we even retried with your browser's cookies without success from this connection. The upcoming Windows desktop app handles this natively. Public posts still work.";
   }
   if (/unsupported url|not a valid url|is not a valid/i.test(msg)) {
