@@ -520,8 +520,9 @@ async function enrichChannel(pageUrl, info) {
             const ownerIdx = raw.indexOf("videoOwnerRenderer");
             const searchRegion = ownerIdx !== -1 ? raw.slice(ownerIdx, ownerIdx + 80000) : raw;
 
-            // Extract high-res channel avatar
-            const avatarMatch = searchRegion.match(/https:\/\/yt3\.(?:ggpht|googleusercontent)\.com\/[a-zA-Z0-9_\-=]+/);
+            // Extract high-res channel avatar (note: path chars / and .
+            // must be allowed or the match truncates at ".../ytc").
+            const avatarMatch = searchRegion.match(/https:\/\/yt3\.(?:ggpht|googleusercontent)\.com\/[a-zA-Z0-9_\-.\/]+/);
             if (avatarMatch) {
               extra.avatar = avatarMatch[0].replace(/=s\d+[^"]*/, "=s400");
             }
@@ -551,6 +552,24 @@ async function enrichChannel(pageUrl, info) {
           }
         } catch {
           /* best effort */
+        }
+        // Still nothing? The channel's own page is public and always
+        // carries the avatar in its og:image.
+        if (!extra.avatar && extra.url) {
+          try {
+            const ch = await safeNav(extra.url, {
+              headers: {
+                "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+                "Accept-Language": "en-US,en;q=0.9",
+              },
+            });
+            if (ch.ok) {
+              const og = (await ch.text()).match(/<meta property="og:image" content="([^"]+)"/)?.[1];
+              if (og) extra.avatar = og.replace(/=s\d+[^"=\s]*/, "=s400");
+            }
+          } catch {
+            /* best effort */
+          }
         }
       }
     } else if (/instagram\./.test(host)) {
