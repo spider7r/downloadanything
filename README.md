@@ -1,3 +1,13 @@
+---
+title: Download Anything
+emoji: 📥
+colorFrom: indigo
+colorTo: pink
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Download Anything
 
 Free, no-signup media downloader — web app + Windows desktop app.

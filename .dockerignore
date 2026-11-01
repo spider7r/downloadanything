@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+apps/server/bin
+**/apps/server/bin
+.git
+.github
+deploy
+*.md
+!README.md
+apps/web/node_modules
+apps/server/node_modules
