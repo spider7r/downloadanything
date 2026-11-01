@@ -1,0 +1,12 @@
+# Render Blueprint — deploys Download Anything in one click after connecting GitHub.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: download-anything
+    runtime: docker            # builds the root Dockerfile (web + API in one container)
+    plan: free                 # 512 MB RAM, spins down after 15 min idle, 750 h/month
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true           # every push to the branch redeploys
+    healthCheckPath: /api/health
+    # No env vars needed: server auto-downloads yt-dlp + ffmpeg on boot and
+    # binds to Render's injected $PORT automatically.
