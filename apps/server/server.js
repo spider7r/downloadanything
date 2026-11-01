@@ -1,3 +1,16 @@
+function parseSubscriberCount(str) {
+  if (!str) return null;
+  const m = str.match(/([\d.]+)\s*([KkMmBb]|thousand|million|billion)?\s*subscribers?/i);
+  if (!m) return null;
+  const num = parseFloat(m[1].replace(/,/g, ''));
+  if (isNaN(num)) return null;
+  const unit = (m[2] || '').toLowerCase();
+  if (unit === 'k' || unit === 'thousand') return Math.round(num * 1_000);
+  if (unit === 'm' || unit === 'million') return Math.round(num * 1_000_000);
+  if (unit === 'b' || unit === 'billion') return Math.round(num * 1_000_000_000);
+  return Math.round(num);
+}
+
 /**
  * Download Anything — downloader API.
  *
@@ -467,22 +480,50 @@ async function enrichChannel(pageUrl, info) {
     if (info.uploader_url) extra.url = info.uploader_url;
     else if (info.channel_url) extra.url = info.channel_url;
 
-    if (/youtube\./.test(host)) {
-      // channel avatar lives in the watch page's owner renderer
-      if (info.webpage_url) {
-        const page = await safeNav(info.webpage_url, {
-          headers: { "User-Agent": UA_PAGE, "Accept-Language": "en-US,en;q=0.9" },
-        });
-        if (page.ok) {
-          const html = unescapeAll(await page.text());
-          const m =
-            html.match(
-              /"videoOwnerRenderer":\s*\{\s*"thumbnail":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
-            ) ||
-            html.match(
-              /"avatar":\s*\{\s*"thumbnails":\s*\[\s*\{\s*"url":\s*"(https:\/\/yt3\.(?:ggpht|googleusercontent)\.com[^"]+)"/,
-            );
-          if (m) extra.avatar = m[1].replace(/=s\d+/, "=s400");
+    if (/(?:youtube\.com|youtu\.be)/i.test(host) || /youtube/i.test(info.extractor_key || info.extractor || "")) {
+      // channel avatar & real subscribers live in the watch page's owner renderer
+      const ytTargetUrl = info.webpage_url || pageUrl;
+      if (ytTargetUrl) {
+        try {
+          const page = await safeNav(ytTargetUrl, {
+            headers: { "User-Agent": UA_PAGE, "Accept-Language": "en-US,en;q=0.9" },
+          });
+          if (page.ok) {
+            const raw = await page.text();
+            const ownerIdx = raw.indexOf("videoOwnerRenderer");
+            const searchRegion = ownerIdx !== -1 ? raw.slice(ownerIdx, ownerIdx + 80000) : raw;
+
+            // Extract high-res channel avatar
+            const avatarMatch = searchRegion.match(/https:\/\/yt3\.(?:ggpht|googleusercontent)\.com\/[a-zA-Z0-9_\-=]+/);
+            if (avatarMatch) {
+              extra.avatar = avatarMatch[0].replace(/=s\d+[^"]*/, "=s400");
+            }
+
+            // Channel profile link fallback
+            if (!extra.url) {
+              const canonMatch = searchRegion.match(/"canonicalBaseUrl":"([^"]+)"/);
+              if (canonMatch) {
+                extra.url = `https://www.youtube.com${canonMatch[1]}`;
+              }
+            }
+
+            // Verified check
+            if (searchRegion.includes("CHECK_CIRCLE_FILLED") || searchRegion.includes("Verified")) {
+              extra.verified = true;
+            }
+
+            // Real subscriber count (e.g. "256K subscribers" or "256 thousand subscribers")
+            const subMatch = searchRegion.match(/([\d.]+\s*(?:[KkMmBb]|thousand|million|billion)?\s*subscribers?)/i) ||
+                             raw.match(/([\d.]+\s*(?:[KkMmBb]|thousand|million|billion)?\s*subscribers?)/i);
+            if (subMatch) {
+              const parsed = parseSubscriberCount(subMatch[1]);
+              if (parsed != null && parsed > 0) {
+                extra.followers = parsed;
+              }
+            }
+          }
+        } catch {
+          /* best effort */
         }
       }
     } else if (/instagram\./.test(host)) {
@@ -677,7 +718,7 @@ app.post("/api/info", async (req, res) => {
       channel: info.channel || info.uploader || null,
       channel_subs: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
       channel_avatar: extra.avatar,
-      channel_followers: extra.followers,
+      channel_followers: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
       channel_following: extra.following,
       channel_verified: extra.verified ?? info.channel_is_verified ?? null,
       channel_url: extra.url ?? null,
@@ -728,12 +769,18 @@ function activeCount() {
 }
 
 function makeDownloadArgs(url, format, wantMp3) {
+  // If format is a video-only format (e.g. '137', 'f137', '248', etc.), merge best audio automatically!
+  let resolvedFormat = format;
+  if (!wantMp3 && format && !format.includes("+") && !format.includes("/") && !format.startsWith("ba")) {
+    resolvedFormat = `${format}+ba[ext=m4a]/ba/b`;
+  }
+
   return [
     "--newline",
     "--progress",
     "--quiet", // suppress banner lines; progress lines still print
     "-f",
-    format,
+    resolvedFormat,
     "--no-playlist",
     "--no-warnings",
     "--no-mtime",
@@ -741,7 +788,9 @@ function makeDownloadArgs(url, format, wantMp3) {
     "--no-part",
     "-o",
     "%(title).80B.%(ext)s",
-    ...(FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : []),
+    ...FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : [],
+    // Choose a container both codecs actually fit in (VP9+Opus → WebM).
+    ...(FFMPEG_PATH ? ["--merge-output-format", "mp4/webm"] : []),
     ...(wantMp3 ? ["-x", "--audio-format", "mp3", "--audio-quality", "0"] : []),
     url,
   ];
@@ -874,6 +923,15 @@ app.post("/api/download", async (req, res) => {
   }
 
   const wantMp3 = req.body.mp3 === true;
+
+  /* Blanket fix for "download has no sound": Instagram (and other platforms)
+   * now publish video-only VP9/H.264 streams. A request for one format id gets
+   * the best audio attached & merged automatically. The selector falls back
+   * gracefully (`<id>+ba` -> `<id>` -> `b`) for muxed- and audio-only ids.     */
+  const dlFormat =
+    format.includes("+") || /^ba/.test(format) || wantMp3
+      ? format
+      : `${format}+ba/${format}/b`;
   if (wantMp3 && !FFMPEG_PATH) {
     return res.status(422).json({ error: "MP3 conversion needs FFmpeg, which is unavailable on the server" });
   }
@@ -925,7 +983,7 @@ app.post("/api/download", async (req, res) => {
   // cookies when a platform closes the download with an auth/IP wall.
   let attemptIdx = 0; // 0 = plain attempt; n = COOKIE_BROWSERS[n-1] cookies
   const run = () => {
-    const args = [...makeDownloadArgs(targetUrl, format, wantMp3)];
+    const args = [...makeDownloadArgs(targetUrl, dlFormat, wantMp3)];
     if (attemptIdx > 0) {
       job.cookieBrowser = COOKIE_BROWSERS[attemptIdx - 1];
       args.push("--cookies-from-browser", job.cookieBrowser);
@@ -1115,7 +1173,18 @@ setInterval(() => {
   }
 }, 60_000);
 
-/* --------------- Serve JSON (never HTML) for unknown routes ---------------- */
+/* --------------- Serve web frontend if built (Desktop / Production) --------------- */
+
+const WEB_DIST = path.join(__dirname, "../web/dist");
+if (fs.existsSync(WEB_DIST)) {
+  app.use(express.static(WEB_DIST));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api/")) return next();
+    res.sendFile(path.join(WEB_DIST, "index.html"));
+  });
+}
+
+/* --------------- Serve JSON for unknown API routes ---------------- */
 
 app.use((req, res) => res.status(404).json({ error: "Unknown endpoint" }));
 
@@ -1138,7 +1207,7 @@ async function main() {
   } catch {}
   await fsp.mkdir(TMP_DIR, { recursive: true });
 
-  app.listen(PORT, () => console.log(`\n⚡ Download Anything API listening on http://localhost:${PORT}\n`));
+  app.listen(PORT, "0.0.0.0", () => console.log(`\n⚡ Download Anything API listening on http://localhost:${PORT}\n`));
 }
 
 main();

@@ -3,17 +3,22 @@ import {
   AlertCircle,
   BadgeCheck,
   CalendarDays,
+  Check,
+  CheckCircle2,
   ExternalLink,
   Download,
   Eye,
   Film,
   Link2,
   Loader2,
+  Maximize2,
+  Minimize2,
   Music,
   Play,
   ThumbsUp,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import {
   cancelJob,
@@ -132,70 +137,348 @@ function sortExts(exts: string[]): string[] {
 
 type ActiveJob = Job & { label: string; delivered?: boolean };
 
-const CheckCircleGreen = () => (
-  <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-green-400" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" opacity="0.4" />
-    <path d="m8.5 12.5 2.5 2.5 5-5.5" />
-  </svg>
-);
+/* -------------------- Animated Cyber-Track Modal (Concept 1) -------------------- */
 
-function JobRow({ job, onCancel }: { job: ActiveJob; onCancel: (id: string) => void }) {
+function DownloadProgressModal({
+  job,
+  info,
+  platform,
+  onMinimize,
+  onCancel,
+}: {
+  job: ActiveJob;
+  info: MediaInfo | null;
+  platform: Platform | null;
+  onMinimize: () => void;
+  onCancel: (id: string) => void;
+}) {
+  const percent = Math.min(100, Math.max(0, job.percent || 0));
+  const brandColor = platform?.color || "#8b5cf6";
+  const platformKey = platform?.key || "youtube";
   const active = job.status === "starting" || job.status === "downloading" || job.status === "converting";
-  const done = job.status === "done" && !job.delivered;
+  const done = job.status === "done";
+  const isError = job.status === "error";
+
+  // Escape key minimizes modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onMinimize();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onMinimize]);
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3">
-      <div className="flex items-center gap-3">
-        {active && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-indigo-400" />}
-        {job.status === "error" && <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />}
-        {done && <CheckCircleGreen />}
+    <div
+      onClick={onMinimize}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/80 backdrop-blur-xl animate-in fade-in duration-300"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-lg sm:max-w-xl overflow-hidden rounded-3xl border border-zinc-700/80 bg-zinc-950/95 p-4 sm:p-7 shadow-2xl shadow-black ring-1 ring-white/10 backdrop-blur-2xl transition-all duration-300 animate-in zoom-in-95"
+      >
+        {/* Ambient neon radial glow matching platform brand */}
+        <div
+          className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 h-60 w-96 rounded-full blur-3xl opacity-35 transition-all duration-500"
+          style={{ backgroundColor: brandColor }}
+        />
 
-        <span className={`min-w-0 flex-1 truncate text-sm font-medium ${done ? "text-green-300" : "text-zinc-100"}`}>
-          {job.status === "done" && job.filename ? job.filename : job.label}
-        </span>
-
-        {active && job.speed && <span className="shrink-0 text-xs text-zinc-500">{job.speed}</span>}
-        {active && job.eta && <span className="shrink-0 text-xs text-zinc-500">ETA {job.eta}</span>}
-
-        {active ? (
-          <button
-            onClick={() => onCancel(job.id)}
-            title="Cancel download"
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+        {/* Top bar: Platform Pill & Action Controls */}
+        <div className="relative flex items-center justify-between gap-2">
+          <div
+            className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] sm:text-xs font-black tracking-wider uppercase shadow-sm"
+            style={{
+              backgroundColor: `${brandColor}22`,
+              color: brandColor,
+              border: `1px solid ${brandColor}44`,
+            }}
           >
-            <X className="h-4 w-4" />
-          </button>
-        ) : (
-          <span className="w-7 shrink-0" />
+            <PlatformIcon platformKey={platformKey} className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+            <span className="truncate">{platform?.name || "Media"} Download</span>
+          </div>
+
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onMinimize}
+              title="Minimize to floating corner pill"
+              className="flex h-8 w-8 items-center justify-center rounded-xl text-zinc-400 hover:bg-zinc-800/80 hover:text-white transition"
+            >
+              <Minimize2 className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => onCancel(job.id)}
+              title={active ? "Cancel download" : "Close"}
+              className="flex h-8 w-8 items-center justify-center rounded-xl text-zinc-400 hover:bg-zinc-800/80 hover:text-red-400 transition"
+            >
+              <X className="h-4.5 w-4.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Media snippet preview */}
+        <div className="relative mt-4 sm:mt-5 flex items-center gap-3 sm:gap-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/60 p-3 sm:p-3.5 backdrop-blur-sm">
+          {info?.thumbnail ? (
+            <img
+              src={info.thumbnail}
+              alt=""
+              className="h-14 w-20 sm:h-16 sm:w-24 shrink-0 rounded-xl object-cover ring-1 ring-white/10"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="flex h-14 w-20 sm:h-16 sm:w-24 shrink-0 items-center justify-center rounded-xl bg-zinc-800 text-zinc-500">
+              <Film className="h-5 w-5 sm:h-6 sm:w-6" />
+            </div>
+          )}
+
+          <div className="min-w-0 flex-1">
+            <h4 className="line-clamp-1 text-xs sm:text-sm font-extrabold text-white">
+              {info?.title || job.title || "Selected Media"}
+            </h4>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 sm:gap-2">
+              <span className="rounded-md bg-indigo-500/20 px-1.5 sm:px-2 py-0.5 text-[10px] sm:text-[11px] font-black tracking-wider text-indigo-300 ring-1 ring-indigo-500/30">
+                {job.label}
+              </span>
+              {info?.channel && (
+                <span className="flex items-center gap-1 text-[11px] sm:text-xs text-zinc-400 font-medium truncate max-w-[130px] sm:max-w-[180px]">
+                  <span className="truncate">{info.channel}</span>
+                  {info.channel_verified && <BadgeCheck className="h-3.5 w-3.5 text-sky-400 shrink-0" />}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* --- The Cyber-Rail (Hero Animated Track with Sliding Platform Logo) --- */}
+        <div className="relative mt-5 sm:mt-7 mb-3 sm:mb-4">
+          {/* Source and Destination track status labels */}
+          <div className="mb-2 flex items-center justify-between text-[11px] sm:text-xs font-semibold text-zinc-400 gap-2">
+            <span className="flex items-center gap-1.5 min-w-0 truncate">
+              <span
+                className="h-2 w-2 shrink-0 rounded-full animate-ping"
+                style={{ backgroundColor: brandColor }}
+              />
+              <span className="truncate">Source: {platform?.name || "Server"}</span>
+            </span>
+            <span className="flex items-center gap-1 shrink-0 text-zinc-400">
+              {done ? (
+                <span className="text-emerald-400 font-bold flex items-center gap-1">
+                  <Check className="h-3 w-3 sm:h-3.5 sm:w-3.5" /> Saved
+                </span>
+              ) : (
+                <span className="text-zinc-500">To Downloads</span>
+              )}
+            </span>
+          </div>
+
+          {/* The Rail */}
+          <div className="relative h-14 sm:h-16 w-full rounded-2xl bg-zinc-950/90 border border-zinc-800/90 p-1.5 shadow-inner flex items-center overflow-visible">
+            {/* Background track rail line */}
+            <div className="absolute inset-x-3 sm:inset-x-4 h-1.5 rounded-full bg-zinc-800/80" />
+
+            {/* Glowing progress fill with shimmer */}
+            <div
+              className="absolute left-1.5 top-1.5 bottom-1.5 rounded-xl transition-all duration-300 ease-out overflow-hidden"
+              style={{
+                width: `calc(${percent}% - 3px)`,
+                background: `linear-gradient(90deg, #6366f1 0%, ${brandColor} 100%)`,
+                boxShadow: `0 0 24px ${brandColor}66, 0 0 8px ${brandColor}aa`,
+              }}
+            >
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/35 to-transparent animate-shimmer" />
+            </div>
+
+            {/* THE SLIDING PLATFORM ICON CARRIER (glides from left to right as percent progresses!) */}
+            <div
+              className="absolute top-1/2 transition-all duration-300 ease-out z-20 pointer-events-none"
+              style={{
+                left: `clamp(24px, ${percent}%, calc(100% - 24px))`,
+                transform: "translate(-50%, -50%)",
+              }}
+            >
+              <div
+                className="relative flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-2xl bg-zinc-950 border-2 shadow-2xl transition-transform duration-200"
+                style={{
+                  borderColor: brandColor,
+                  boxShadow: `0 0 26px ${brandColor}aa, inset 0 0 10px ${brandColor}33`,
+                }}
+              >
+                <PlatformIcon platformKey={platformKey} className="h-5 w-5 sm:h-6 sm:w-6 transition-transform duration-300" />
+
+                {active && (
+                  <span
+                    className="absolute -inset-1 rounded-2xl animate-ping opacity-35"
+                    style={{ backgroundColor: brandColor }}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Telemetry row: responsive flex that wraps gracefully on small screens */}
+          <div className="mt-3.5 sm:mt-4 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="text-2xl sm:text-3xl font-black text-white tabular-nums tracking-tight">
+                {Math.round(percent)}%
+              </span>
+              {job.speed && (
+                <span className="flex items-center gap-1 rounded-lg bg-zinc-900 border border-zinc-800 px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-bold text-zinc-200 shadow-sm">
+                  <Zap className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-amber-400 fill-amber-400 shrink-0" />
+                  <span className="tabular-nums">{job.speed}</span>
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+              {job.eta && (
+                <span className="rounded-lg bg-zinc-900 border border-zinc-800 px-2 sm:px-2.5 py-1 text-[11px] sm:text-xs font-medium text-zinc-400 tabular-nums">
+                  ETA {job.eta}
+                </span>
+              )}
+              <span
+                className={`rounded-lg px-2 sm:px-2.5 py-1 text-[10px] sm:text-xs font-black uppercase tracking-wider ${
+                  done
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                    : job.status === "converting"
+                      ? "bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40"
+                      : "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40"
+                }`}
+              >
+                {done
+                  ? "Done"
+                  : job.status === "converting"
+                    ? "FFmpeg Merge"
+                    : job.status === "starting"
+                      ? "Starting"
+                      : "Downloading"}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Completion View */}
+        {done && (
+          <div className="mt-5 sm:mt-6 rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-3.5 sm:p-4 animate-in fade-in duration-300">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
+                <CheckCircle2 className="h-5 w-5 sm:h-6 sm:w-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs sm:text-sm font-bold text-emerald-200">Download Complete!</p>
+                <p className="truncate text-[11px] sm:text-xs text-emerald-400/80">
+                  {job.filename || "Your file is ready and saved to your device."}
+                </p>
+              </div>
+            </div>
+            <div className="mt-3.5 flex gap-2">
+              <button
+                onClick={onMinimize}
+                className="flex-1 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg shadow-emerald-600/30 hover:brightness-110 active:scale-95 transition"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Active In-Progress Controls */}
+        {active && (
+          <div className="mt-5 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-4 border-t border-zinc-800/60">
+            <button
+              onClick={onMinimize}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-900 border border-zinc-800 px-4 py-2.5 text-xs font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-white transition active:scale-95"
+            >
+              <Minimize2 className="h-3.5 w-3.5" />
+              <span>Minimize to background</span>
+            </button>
+            <button
+              onClick={() => onCancel(job.id)}
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900/60 border border-red-900/40 px-4 py-2.5 text-xs font-semibold text-red-400 hover:bg-red-950/50 hover:text-red-300 transition active:scale-95"
+            >
+              <X className="h-3.5 w-3.5" />
+              <span>Cancel download</span>
+            </button>
+          </div>
+        )}
+
+        {/* Error View */}
+        {isError && (
+          <div className="mt-5 sm:mt-6 rounded-2xl border border-red-900/60 bg-red-950/30 p-3.5 sm:p-4 animate-in fade-in duration-300">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="h-5 w-5 sm:h-6 sm:w-6 shrink-0 text-red-400" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs sm:text-sm font-bold text-red-200">Download Failed</p>
+                <p className="text-[11px] sm:text-xs text-red-300/80 mt-0.5">{job.error || "An unexpected error occurred."}</p>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={onMinimize}
+                className="rounded-xl bg-zinc-800 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-700 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------- Floating Corner Progress Pill -------------------- */
+
+function FloatingProgressPill({
+  job,
+  platform,
+  onClick,
+}: {
+  job: ActiveJob;
+  platform: Platform | null;
+  onClick: () => void;
+}) {
+  const brandColor = platform?.color || "#8b5cf6";
+  const done = job.status === "done";
+  const percent = Math.min(100, Math.max(0, job.percent || 0));
+
+  return (
+    <div
+      onClick={onClick}
+      className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-40 max-w-[calc(100vw-32px)] sm:max-w-xs flex cursor-pointer items-center gap-3 rounded-2xl border border-zinc-700/80 bg-zinc-950/95 px-3.5 py-2.5 sm:px-4 sm:py-3 shadow-2xl backdrop-blur-xl ring-1 ring-white/10 transition-all hover:scale-105 hover:border-zinc-500 animate-in slide-in-from-bottom-5 duration-300"
+      style={{ boxShadow: `0 8px 32px -8px ${brandColor}55` }}
+    >
+      <div
+        className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-zinc-900 border"
+        style={{ borderColor: brandColor }}
+      >
+        <PlatformIcon platformKey={platform?.key || "youtube"} className="h-5 w-5" />
+        {!done && (
+          <span
+            className="absolute -inset-0.5 rounded-xl animate-ping opacity-30"
+            style={{ backgroundColor: brandColor }}
+          />
         )}
       </div>
 
-      {(active || job.status === "error") && (
-        <>
-          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-            {job.status === "error" ? (
-              <div className="h-full w-full bg-red-900/60" />
-            ) : (
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-fuchsia-500 transition-all duration-500"
-                style={{ width: `${job.percent}%` }}
-              />
-            )}
-          </div>
-          <div className="mt-1.5 flex items-center justify-between text-xs">
-            <span className={job.status === "error" ? "text-red-400" : "text-zinc-500"}>
-              {job.status === "error"
-                ? job.error || "Download failed"
-                : job.status === "converting"
-                  ? "Merging / converting with FFmpeg…"
-                  : job.status === "starting"
-                    ? "Connecting…"
-                    : `${Math.round(job.percent)}%`}
-            </span>
-            {active && <span className="font-semibold text-zinc-400">{Math.round(job.percent)}%</span>}
-          </div>
-        </>
-      )}
+      <div className="min-w-0 pr-2">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-bold text-white truncate max-w-[140px]">{job.label}</span>
+          <span className="text-xs font-black text-indigo-400 tabular-nums">{Math.round(percent)}%</span>
+        </div>
+        <div className="flex items-center gap-2 text-[10px] text-zinc-400 mt-0.5">
+          {done ? (
+            <span className="text-emerald-400 font-bold">Ready</span>
+          ) : (
+            <>
+              <span>{job.speed || "Downloading"}</span>
+              {job.eta && <span>· ETA {job.eta}</span>}
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="h-7 w-7 rounded-lg bg-zinc-800/80 flex items-center justify-center text-zinc-400 hover:text-white">
+        <Maximize2 className="h-3.5 w-3.5" />
+      </div>
     </div>
   );
 }
@@ -306,6 +589,8 @@ export default function Downloader() {
   const [tab, setTab] = useState<"video" | "audio">("video");
   const [extFilter, setExtFilter] = useState<string>("all");
   const [jobs, setJobs] = useState<ActiveJob[]>([]);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const jobsRef = useRef(jobs);
   jobsRef.current = jobs;
 
@@ -376,9 +661,10 @@ export default function Downloader() {
   }
 
   const beginJob = useCallback(async (options: { url: string; format?: string; mp3?: boolean }, label: string) => {
+    const tempId = "job_" + Math.random().toString(36).slice(2, 9);
     try {
       let job: ActiveJob = {
-        id: "",
+        id: tempId,
         label,
         status: "starting",
         percent: 0,
@@ -389,10 +675,13 @@ export default function Downloader() {
         error: null,
       };
       setJobs((prev) => [...prev, job]);
+      setActiveJobId(tempId);
+      setIsModalOpen(true);
 
       const id = await startDownload(options);
       job.id = id;
-      setJobs((prev) => prev.map((j) => (j === job ? { ...j, id } : j)));
+      setActiveJobId((curr) => (curr === tempId ? id : curr));
+      setJobs((prev) => prev.map((j) => (j.id === tempId ? { ...j, id } : j)));
 
       for (;;) {
         await new Promise((r) => setTimeout(r, 1000));
@@ -407,7 +696,11 @@ export default function Downloader() {
       }
     } catch (err) {
       setJobs((prev) =>
-        prev.map((j) => (j.label === label && !j.id ? { ...j, status: "error", error: err instanceof Error ? err.message : "Failed to start" } : j)),
+        prev.map((j) =>
+          j.label === label && (j.id === tempId || !j.id)
+            ? { ...j, status: "error", error: err instanceof Error ? err.message : "Failed to start" }
+            : j,
+        ),
       );
     }
   }, []);
@@ -432,6 +725,7 @@ export default function Downloader() {
   const fVideoOnly = groups.videoOnly.filter((f) => extFilter === "all" || f.ext === extFilter);
   const fAudio = groups.audio.filter((f) => extFilter === "all" || f.ext === extFilter);
   const showMp3Card = tab === "audio" && (extFilter === "all" || extFilter === "mp3") && groups.audio.length > 0;
+  const currentModalJob = (activeJobId ? jobs.find((j) => j.id === activeJobId) : null) ?? jobs[jobs.length - 1] ?? null;
 
   return (
     <div id="downloader" className="mx-auto w-full max-w-5xl scroll-mt-24">
@@ -653,6 +947,13 @@ export default function Downloader() {
             })}
           </div>
 
+          {/* Codecs legend — VP9/AV1 are platform-upgraded codecs, not errors */}
+          <p className="border-t border-zinc-800/60 bg-zinc-950/40 px-5 py-2.5 text-[11px] leading-relaxed text-zinc-500">
+            <span className="font-bold text-zinc-400">H.264/AAC</span> = max compatibility ·{" "}
+            <span className="font-bold text-zinc-400">VP9/AV1/Opus</span> = newer codecs, same quality in smaller files,
+            play in every modern player. Sound is always merged in automatically.
+          </p>
+
           {/* --- formats --- */}
           <div className="border-t border-zinc-800 bg-zinc-950/20">
             {tab === "video" && (
@@ -740,21 +1041,40 @@ export default function Downloader() {
             )}
           </div>
 
-          {/* --- active jobs / deliveries --- */}
-          {jobs.length > 0 && (
-            <div className="space-y-2 border-t border-zinc-800 bg-zinc-950/40 p-4">
-              {jobs.map((j, i) => (
-                <JobRow key={j.id || i} job={j} onCancel={cancelOne} />
-              ))}
-            </div>
-          )}
-
-          {jobs.length === 0 && (
-            <p className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/60 px-5 py-3 text-xs text-zinc-500">
-              <span>Pick a quality above — you'll see live progress, then your browser will save the file.</span>
-            </p>
-          )}
+          {/* Bottom helper tip */}
+          <div className="flex items-center justify-between border-t border-zinc-800 bg-zinc-950/60 px-5 py-3 text-xs text-zinc-500">
+            <span>Pick any quality above to download with live progress.</span>
+            {currentModalJob && !isModalOpen && (
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="font-bold text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition flex items-center gap-1.5"
+              >
+                <Zap className="h-3 w-3 text-amber-400 fill-amber-400" />
+                <span>View download ({Math.round(currentModalJob.percent)}%)</span>
+              </button>
+            )}
+          </div>
         </div>
+      )}
+
+      {/* --- Download Progress Modal (Concept 1: Cyber-Track Slider) --- */}
+      {isModalOpen && currentModalJob && (
+        <DownloadProgressModal
+          job={currentModalJob}
+          info={info}
+          platform={platformInfo}
+          onMinimize={() => setIsModalOpen(false)}
+          onCancel={cancelOne}
+        />
+      )}
+
+      {/* --- Floating corner pill when minimized and active --- */}
+      {!isModalOpen && currentModalJob && (
+        <FloatingProgressPill
+          job={currentModalJob}
+          platform={platformInfo}
+          onClick={() => setIsModalOpen(true)}
+        />
       )}
     </div>
   );
@@ -796,8 +1116,8 @@ function FormatSection({
           return (
             <a
               key={f.format_id}
-              href={`/api/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent(f.format_id)}`}
-              onClick={(e) => onClick(e, { url, format: f.format_id }, label)}
+              href={`/api/download?url=${encodeURIComponent(url)}&format=${encodeURIComponent((f.acodec && f.acodec !== "none") ? f.format_id : `${f.format_id}+ba/b`)}`}
+              onClick={(e) => onClick(e, { url, format: (f.acodec && f.acodec !== "none") ? f.format_id : `${f.format_id}+ba/b` }, label)}
               className="group flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 bg-zinc-900/20 px-5 py-3 text-left transition-all duration-200 hover:bg-zinc-800/60"
             >
               <div className="flex items-center gap-3.5 min-w-0">
@@ -842,7 +1162,7 @@ function FormatSection({
 
               <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 pt-2 sm:pt-0 border-t border-zinc-800/40 sm:border-t-0">
                 <span className="rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs font-semibold text-zinc-400 tabular-nums">
-                  {fmtSize(f.filesize, f.filesize_approx) || "Direct stream"}
+                  {fmtSize(f.filesize, f.filesize_approx) || "Size N/A"}
                 </span>
 
                 <span className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-indigo-600 to-fuchsia-600 px-4 py-2 text-xs font-bold text-white shadow-md shadow-indigo-600/20 transition-all duration-200 group-hover:from-indigo-500 group-hover:to-fuchsia-500 group-hover:shadow-indigo-500/40 group-hover:scale-[1.03] active:scale-95">
