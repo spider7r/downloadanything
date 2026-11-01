@@ -185,6 +185,33 @@ function assertValidUrl(u) {
   }
 }
 
+/* Decode the handful of HTML entities IG meta tags use. */
+function htmlUnescape(s) {
+  if (!s) return "";
+  return s
+    .replace(/&#x([0-9a-f]+);?/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);?/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&middot;/g, "·")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&bullet;/g, "•")
+    .replace(/&sol;/g, "/");
+}
+
+/* "161" / "12,345" / "1.5M" -> number */
+function parseSocialCount(v) {
+  if (!v) return null;
+  const m = String(v).trim().match(/^([\d.,]+)\s*([kKmM]?)$/);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/,/g, ""));
+  if (!Number.isFinite(n)) return null;
+  const mult = { k: 1e3, m: 1e6 }[m[2].toLowerCase()];
+  return Math.round(mult ? n * mult : n);
+}
+
 function runYtDlp(args, timeoutMs = 90_000) {
   return new Promise((resolve, reject) => {
     const child = spawn(YTDLP_PATH, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -562,8 +589,31 @@ async function enrichChannel(pageUrl, info) {
           extra.verified = getUser.is_verified ?? null;
           if (getUser.username) extra.url = `https://www.instagram.com/${getUser.username}/`;
         } else {
-          extra.avatar = await unavatar("instagram", igUser);
-          extra.following = "Private";
+          // IG API rate-limited → the crawler (link-preview) variant of the
+          // profile page is open to everyone and carries the real avatar and
+          // public follower/following counts in its og: meta tags.
+          let crawlOk = false;
+          try {
+            const crawl = await safeNav(`https://www.instagram.com/${igUser}/`, {
+              headers: {
+                "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+                "Accept-Language": "en-US,en;q=0.9",
+              },
+            });
+            if (crawl.ok) {
+              crawlOk = true;
+              const raw = await crawl.text();
+              extra.avatar ??= htmlUnescape(raw.match(/<meta property="og:image" content="([^"]+)"/)?.[1] || "") || null;
+              const desc = htmlUnescape(raw.match(/<meta property="og:description" content="([^"]*)"/)?.[1] || "");
+              extra.followers ??= parseSocialCount(desc.match(/([\d.,]+\s*[kKmM]?)\s*Followers/i)?.[1]);
+              extra.following ??= parseSocialCount(desc.match(/([\d.,]+\s*[kKmM]?)\s*Following/i)?.[1]);
+            }
+          } catch {
+            /* fall through to unavatar */
+          }
+          // Can't see the data at all → follow IG's logged-out convention.
+          if (!crawlOk) extra.following = "Private";
+          if (!extra.avatar) extra.avatar = await unavatar("instagram", igUser);
         }
         if (!extra.url && igUser) extra.url = `https://www.instagram.com/${igUser}/`;
       }

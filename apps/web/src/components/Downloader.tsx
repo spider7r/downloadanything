@@ -119,8 +119,10 @@ function useFormatGroups(info: MediaInfo | null) {
       return out;
     };
     return {
-      muxed: dedupe(groups["Video + audio"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${codecName(f.vcodec)}`),
-      videoOnly: dedupe(groups["Video only"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${codecName(f.vcodec)}`),
+      // Keep every rung of a platform's quality ladder: same height but a
+      // different bitrate (Instagram/TikTok serve many) is a distinct choice.
+      muxed: dedupe(groups["Video + audio"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${codecName(f.vcodec)}|${f.tbr ? Math.round(f.tbr / 100) : 0}`),
+      videoOnly: dedupe(groups["Video only"], (f) => `${f.height ?? 0}|${f.fps ?? 0}|${f.ext}|${codecName(f.vcodec)}|${f.tbr ? Math.round(f.tbr / 100) : 0}`),
       audio: dedupe(groups["Audio only"], (f) => `${f.abr ?? f.tbr ?? 0}|${f.ext}|${codecName(null, f.acodec)}`),
     };
   }, [info]);
