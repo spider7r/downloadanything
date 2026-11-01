@@ -554,7 +554,31 @@ async function enrichChannel(pageUrl, info) {
         }
       }
     } else if (/instagram\./.test(host)) {
-      const igUser = (info.uploader || info.channel || "").replace(/^@/, "");
+      /* yt-dlp reports the DISPLAY name ("MR ABU"), not the handle ("mrabu99").
+       * Profile URLs carry the handle in the path; for post URLs resolve it
+       * from the post's own link-preview meta tags.                          */
+      const pathUser = u.pathname.split("/").filter(Boolean)[0];
+      let igUser =
+        pathUser && !/^(p|reel|reels|tv|explore)$/i.test(pathUser)
+          ? pathUser
+          : ((info.uploader || info.channel || "").replace(/^@/, "") || "");
+      if (/^(p|reel|reels|tv)$/i.test(pathUser || "") && info.uploader) {
+        try {
+          const meta = await safeNav(u.href.split("?")[0], {
+            headers: {
+              "User-Agent": "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)",
+              "Accept-Language": "en-US,en;q=0.9",
+            },
+          });
+          if (meta.ok) {
+            const raw = await meta.text();
+            const title = htmlUnescape(raw.match(/<meta property="og:title" content="([^"]*)"/)?.[1] || "");
+            igUser = title.match(/^([^(@\n]+?)\s+on Instagram:/)?.[1]?.trim().replace(/^@/, "") || igUser;
+          }
+        } catch {
+          /* keep display name as best guess */
+        }
+      }
       if (igUser) {
         let getUser = null;
         try {
