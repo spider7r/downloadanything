@@ -3,6 +3,7 @@
 - render.yaml       → Render Blueprint (free web service, Docker runtime)
 - RENDER.md         → Render.com free-tier step-by-step (blocked by some regional ISPs — kept for reference)
 - WOIDEN.md         → free NAT VPS (woiden.id, no card) + Cloudflare Tunnel guide + one-shot server setup
+- BACK4APP.md      → free 256 MB container (live-today option; no card, no Telegram, no queue)
 - EUSERV.md         → free IPv6-only VPS (EUServ, no card, no Telegram) + DNS64 bridge + Cloudflare Tunnel
 - HF-SPACE.md       → Hugging Face Space guide (Docker SDK now requires a paid plan — kept for reference)
 - HF-STEP-BY-STEP.md → HF guide (paid upgrade path)
