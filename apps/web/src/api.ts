@@ -50,6 +50,8 @@ export type Job = {
   error: string | null;
 };
 
+/** Analysis runs as a background job server-side (slow shared vCPUs + hosting
+ * gateways time out long requests), so start it, then poll until done. */
 export async function fetchInfo(url: string, signal?: AbortSignal): Promise<MediaInfo> {
   let res: Response;
   try {
@@ -60,23 +62,35 @@ export async function fetchInfo(url: string, signal?: AbortSignal): Promise<Medi
       signal,
     });
   } catch {
-    throw new Error("Can't reach the download server. Is it running? (pnpm dev:server)");
+    throw new Error("Can't reach the download server. Is it running? (npm run dev:server)");
   }
 
-  const text = await res.text();
-  let data: (MediaInfo & { error?: string }) | null = null;
-  try {
-    data = JSON.parse(text) as MediaInfo & { error?: string };
-  } catch {
-    throw new Error(
-      res.status === 502 || res.status === 500
-        ? "The download server is offline or restarting. Please try again in a moment."
-        : `Unexpected server response (HTTP ${res.status}).`,
-    );
+  const start = await res
+    .json()
+    .catch(() => null)
+    .then((d) => d as { id?: string; error?: string } | null);
+  if (!res.ok || !start?.id) throw new Error(start?.error || "Could not start the analysis");
+
+  // Poll every 1.2s until the server finishes (typical: 2–20 s).
+  for (;;) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    await new Promise((r) => setTimeout(r, 1200));
+    let poll: Response;
+    try {
+      poll = await fetch(`/api/info/${start.id}`, { signal });
+    } catch (err) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      throw new Error("Lost contact with the download server — please try again.");
+    }
+    const data = (await poll.json().catch(() => null)) as {
+      status?: "working" | "done" | "error";
+      info?: MediaInfo | null;
+      error?: string | null;
+    } | null;
+    if (!poll.ok || !data) throw new Error("Lost track of the analysis — please try again.");
+    if (data.status === "done" && data.info) return data.info;
+    if (data.status === "error") throw new Error(data.error || "Could not analyze this link");
   }
-  if (!res.ok) throw new Error(data?.error || `Could not fetch this link (HTTP ${res.status})`);
-  if (!data) throw new Error("Empty response from server");
-  return data;
 }
 
 export async function startDownload(options: {

@@ -755,81 +755,105 @@ app.get("/api/health", async (_req, res) => {
 
 /* ----------------------------- info ------------------------------ */
 
-app.post("/api/info", async (req, res) => {
+const INFO_JOBS = new Map(); // id -> { status: "working"|"done"|"error", info, error, createdAt }
+const INFO_TTL_MS = 5 * 60 * 1000;
+
+async function computeInfo(url) {
+  // Suno song/playlist pages embed everything publicly — no yt-dlp needed.
+  if (/^https?:\/\/(?:www\.)?suno\.com/i.test(url)) {
+    const songs = await sunoSongs(url);
+    return sunoInfoResponse(songs, url);
+  }
+
+  const args = ["-J", "--no-playlist", "--no-warnings", "--no-check-certificates", url];
+  const out = await runYtDlpSmart(args, 120_000);
+  const start = out.indexOf("{");
+  const info = JSON.parse(out.slice(start));
+  const formats = (info.formats || [])
+    .filter((f) => f.format_id && f.url)
+    .filter((f) => {
+      const proto = f.protocol || "";
+      return proto.includes("http") || proto.includes("m3u8") || proto.includes("rtmp");
+    })
+    .map((f) => ({
+      format_id: String(f.format_id),
+      ext: f.ext || "",
+      height: f.height || null,
+      fps: f.fps || null,
+      vcodec: f.vcodec || null,
+      acodec: f.acodec || null,
+      filesize: f.filesize || null,
+      // Estimate size from bitrate × duration when yt-dlp publishes neither —
+      // users should never see a made-up number, only an honest approximation.
+      filesize_approx:
+        f.filesize_approx ||
+        (f.tbr && info.duration ? Math.round((f.tbr * 1000 * info.duration) / 8) : null),
+      tbr: f.tbr || null,
+      abr: f.abr || null,
+      format_note: f.format_note || null,
+    }))
+    .filter((f) => f.ext !== "mhtml");
+  // Channel avatar & follower stats: as much publicly available info as possible.
+  const extra = await enrichChannel(url, info);
+
+  return {
+    title: info.title || info.id || "Untitled",
+    uploader: info.uploader || info.uploader_id || info.channel || null,
+    channel: info.channel || info.uploader || null,
+    channel_subs: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
+    channel_avatar: extra.avatar,
+    channel_followers: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
+    channel_following: extra.following,
+    channel_verified: extra.verified ?? info.channel_is_verified ?? null,
+    channel_url: extra.url ?? null,
+    channel_private: extra.private ?? null,
+    description:
+      typeof info.description === "string" ? info.description.slice(0, 900) : null,
+    view_count: info.view_count ?? null,
+    like_count: info.like_count ?? null,
+    upload_date: info.upload_date ?? null, // YYYYMMDD
+    duration: info.duration || null,
+    thumbnail: info.thumbnail || null,
+    webpage_url: info.webpage_url || url,
+    extractor: info.extractor_key || null,
+    formats,
+  };
+}
+
+/* Analysis is a background job like downloads: on slow shared vCPUs yt-dlp can
+ * take longer than hosting gateways allow, so the client polls instead of
+ * holding one long HTTP request open (fixes 504 Gateway Timeout).            */
+app.post("/api/info", (req, res) => {
   try {
     assertValidUrl(req.body?.url);
   } catch (err) {
     return res.status(err.status || 400).json({ error: err.message });
   }
   const url = req.body.url.trim();
-
-  // Suno song/playlist pages embed everything publicly — no yt-dlp needed.
-  if (/^https?:\/\/(?:www\.)?suno\.com/i.test(url)) {
-    try {
-      const songs = await sunoSongs(url);
-      return res.json(sunoInfoResponse(songs, url));
-    } catch (err) {
-      return res.status(422).json({ error: err.message || "Could not analyze this Suno link" });
-    }
-  }
-
-  const args = ["-J", "--no-playlist", "--no-warnings", "--no-check-certificates", url];
-  try {
-    const out = await runYtDlpSmart(args, 120_000);
-    const start = out.indexOf("{");
-    const info = JSON.parse(out.slice(start));
-    const formats = (info.formats || [])
-      .filter((f) => f.format_id && f.url)
-      .filter((f) => {
-        const proto = f.protocol || "";
-        return proto.includes("http") || proto.includes("m3u8") || proto.includes("rtmp");
-      })
-      .map((f) => ({
-        format_id: String(f.format_id),
-        ext: f.ext || "",
-        height: f.height || null,
-        fps: f.fps || null,
-        vcodec: f.vcodec || null,
-        acodec: f.acodec || null,
-        filesize: f.filesize || null,
-        // Estimate size from bitrate × duration when yt-dlp publishes neither —
-        // users should never see a made-up number, only an honest approximation.
-        filesize_approx:
-          f.filesize_approx ||
-          (f.tbr && info.duration ? Math.round((f.tbr * 1000 * info.duration) / 8) : null),
-        tbr: f.tbr || null,
-        abr: f.abr || null,
-        format_note: f.format_note || null,
-      }))
-      .filter((f) => f.ext !== "mhtml");
-    // Channel avatar & follower stats: as much publicly available info as possible.
-    const extra = await enrichChannel(url, info);
-
-    res.json({
-      title: info.title || info.id || "Untitled",
-      uploader: info.uploader || info.uploader_id || info.channel || null,
-      channel: info.channel || info.uploader || null,
-      channel_subs: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
-      channel_avatar: extra.avatar,
-      channel_followers: extra.followers ?? info.channel_follower_count ?? info.subscriber_count ?? null,
-      channel_following: extra.following,
-      channel_verified: extra.verified ?? info.channel_is_verified ?? null,
-      channel_url: extra.url ?? null,
-      channel_private: extra.private ?? null,
-      description:
-        typeof info.description === "string" ? info.description.slice(0, 900) : null,
-      view_count: info.view_count ?? null,
-      like_count: info.like_count ?? null,
-      upload_date: info.upload_date ?? null, // YYYYMMDD
-      duration: info.duration || null,
-      thumbnail: info.thumbnail || null,
-      webpage_url: info.webpage_url || req.body.url,
-      extractor: info.extractor_key || null,
-      formats,
+  const id = crypto.randomBytes(10).toString("hex");
+  const infoJob = { id, status: "working", info: null, error: null, createdAt: Date.now() };
+  INFO_JOBS.set(id, infoJob);
+  res.json({ id });
+  computeInfo(url)
+    .then((info) => {
+      infoJob.info = info;
+      infoJob.status = "done";
+    })
+    .catch((err) => {
+      infoJob.status = "error";
+      infoJob.error =
+        err.message === "timed out" ? friendlyError("timed out") : friendlyError(err.message || "Could not analyze this link");
     });
-  } catch (err) {
-    res.status(422).json({ error: err.message === "timed out" ? friendlyError("timed out") : friendlyError(err.message || "Could not analyze this link") });
-  }
+});
+
+app.get("/api/info/:id", (req, res) => {
+  const infoJob = INFO_JOBS.get(req.params.id);
+  if (!infoJob) return res.status(404).json({ error: "Unknown analysis job" });
+  res.json({
+    status: infoJob.status,
+    info: infoJob.status === "done" ? infoJob.info : null,
+    error: infoJob.status === "error" ? infoJob.error : null,
+  });
 });
 
 /* ------------------------------------------------------------------ */
@@ -1263,6 +1287,9 @@ setInterval(() => {
       if (job.workDir) fsp.rm(job.workDir, { recursive: true, force: true }).catch(() => {});
       JOBS.delete(id);
     }
+  }
+  for (const [id, infoJob] of INFO_JOBS) {
+    if (now - infoJob.createdAt > INFO_TTL_MS) INFO_JOBS.delete(id);
   }
 }, 60_000);
 
