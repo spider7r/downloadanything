@@ -276,6 +276,26 @@ const AUTH_WALL_RE =
   /login|sign in|cookies|rate.?limit|empty media response|ip address is blocked|blocked from accessing|authenticate|use --cookies|private video|not available in your country/i;
 const COOKIE_BROWSERS = ["chrome", "edge", "firefox", "brave", "opera"];
 
+/* Optional logged-in YouTube session: paste a Netscape-format cookies.txt
+ * (exported from youtube.com) into the YT_COOKIES environment variable on
+ * your hosting dashboard. It lives only on the server — never in the repo
+ * and never sent to browsers. Fixes YouTube's datacenter-IP bot walls.    */
+let YT_COOKIE_FILE = null;
+if (process.env.YT_COOKIES && process.env.YT_COOKIES.trim().length > 40) {
+  try {
+    fs.mkdirSync(TMP_DIR, { recursive: true });
+    YT_COOKIE_FILE = path.join(TMP_DIR, "yt-cookies.txt");
+    fs.writeFileSync(
+      YT_COOKIE_FILE,
+      process.env.YT_COOKIES.replace(/\\r/g, "").replace(/\\n/g, "\n").replace(/\r/g, "") + "\n",
+    );
+    console.log("[cookies] YT_COOKIES detected — applied to YouTube requests");
+  } catch (err) {
+    console.log("[cookies] could not write cookie file:", err.message);
+    YT_COOKIE_FILE = null;
+  }
+}
+
 function isAuthWall(msg) {
   return !!msg && AUTH_WALL_RE.test(msg);
 }
@@ -285,19 +305,39 @@ async function runYtDlpSmart(args, timeoutMs = 90_000) {
     return await runYtDlp(args, timeoutMs);
   } catch (err) {
     if (!isAuthWall(err?.message)) throw err;
-    for (const browser of COOKIE_BROWSERS) {
-      try {
-        console.log(`[info] auth wall — retrying with ${browser} cookies…`);
-        return await runYtDlp([...args, "--cookies-from-browser", browser], timeoutMs);
-      } catch (retryErr) {
-        // DPAPI/missing-browser errors → try the next browser; real content errors → stop
-        if (!/decrypt|dpapi|could not find|failed to (copy|find)|does not exist/i.test(retryErr?.message || "")) {
-          throw retryErr;
-        }
+  }
+  // Fallback ladder for auth/IP walls (datacenter IPs especially):
+  // 1. the host-provided YouTube session (YT_COOKIES env → cookie file)
+  // 2. alternate player clients yt-dlp supports (different bot-check path)
+  // 3. local browser cookies (works on desktop/VPS with browsers installed)
+  const attempts = [];
+  if (YT_COOKIE_FILE) attempts.push(["--cookies", YT_COOKIE_FILE, "the saved session"]);
+  if (/youtu(?:\.be|be\.com)/i.test(args.join(" "))) {
+    attempts.push(["--extractor-args", "youtube:player_client=tv_simply", "the TV player client"]);
+    attempts.push(["--extractor-args", "youtube:player_client=android_vr", "the VR player client"]);
+  }
+  let lastErr = null;
+  for (const [flag, value, label] of attempts) {
+    try {
+      console.log(`[info] auth wall — retrying with ${label}…`);
+      return await runYtDlp([...args, flag, value], timeoutMs);
+    } catch (retryErr) {
+      if (!isAuthWall(retryErr?.message || "")) throw retryErr; // real content error → stop
+      lastErr = retryErr;
+    }
+  }
+  for (const browser of COOKIE_BROWSERS) {
+    try {
+      console.log(`[info] auth wall — retrying with ${browser} cookies…`);
+      return await runYtDlp([...args, "--cookies-from-browser", browser], timeoutMs);
+    } catch (retryErr) {
+      // DPAPI/missing-browser errors → try the next browser; real content errors → stop
+      if (!/decrypt|dpapi|could not find|failed to (copy|find)|does not exist/i.test(retryErr?.message || "")) {
+        throw retryErr;
       }
     }
-    throw err;
   }
+  throw lastErr || new Error("This content needs a logged-in session");
 }
 
 function cleanErr(msg) {
@@ -906,6 +946,7 @@ function makeDownloadArgs(url, format, wantMp3) {
     "-o",
     "%(title).80B.%(ext)s",
     ...FFMPEG_PATH ? ["--ffmpeg-location", FFMPEG_PATH] : [],
+    ...YT_COOKIE_FILE ? ["--cookies", YT_COOKIE_FILE] : [],
     // Choose a container both codecs actually fit in (VP9+Opus → WebM).
     ...(FFMPEG_PATH ? ["--merge-output-format", "mp4/webm"] : []),
     ...(wantMp3 ? ["-x", "--audio-format", "mp3", "--audio-quality", "0"] : []),
