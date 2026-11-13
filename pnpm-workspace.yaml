@@ -1,6 +1,0 @@
-packages:
-  - "apps/*"
-
-# Build scripts pnpm is allowed to run
-allowBuilds:
-  esbuild: true
